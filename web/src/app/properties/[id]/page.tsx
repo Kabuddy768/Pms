@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   apiFetch,
@@ -17,12 +17,12 @@ import {
 function PropertyDetailContent({
   orgId,
   role,
-  propertyId,
 }: {
   orgId: string | null;
   role: string | null;
-  propertyId: string;
 }) {
+  const params = useParams<{ id: string }>();
+  const propertyId = params.id;
   const [property, setProperty] = useState<PropertyItem | null>(null);
   const [buildings, setBuildings] = useState<BuildingItem[]>([]);
   const [units, setUnits] = useState<UnitItem[]>([]);
@@ -353,15 +353,17 @@ function PropertyDetailContent({
 }
 
 export default function PropertyDetailPage() {
-  const params = useParams<{ id: string }>();
   return (
     <AppShell>
       {({ activeMembership }) => (
-        <PropertyDetailContent
-          orgId={activeMembership?.organization_id || null}
-          role={activeMembership?.role || null}
-          propertyId={params.id}
-        />
+        <Suspense
+          fallback={<div className="text-sm text-[#475569]">Loading property...</div>}
+        >
+          <PropertyDetailContent
+            orgId={activeMembership?.organization_id || null}
+            role={activeMembership?.role || null}
+          />
+        </Suspense>
       )}
     </AppShell>
   );
