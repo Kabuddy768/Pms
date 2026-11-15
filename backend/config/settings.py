@@ -111,13 +111,23 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORS_ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8081"
-    ).split(",")
-    if origin.strip()
-]
+_DEFAULT_CORS_ORIGINS = (
+    "https://pms-six-theta.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:8081",
+)
+CORS_ALLOWED_ORIGINS = list(
+    dict.fromkeys(
+        [
+            *(
+                origin.strip().rstrip("/")
+                for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+                if origin.strip()
+            ),
+            *_DEFAULT_CORS_ORIGINS,
+        ]
+    )
+)
 
 CORS_ALLOW_HEADERS = [
     *default_headers,
