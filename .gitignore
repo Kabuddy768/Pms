@@ -1,0 +1,36 @@
+# Python / Django
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.sqlite3
+db.sqlite3
+.pytest_cache/
+.coverage
+htmlcov/
+staticfiles/
+
+# Node / Next.js / Expo
+node_modules/
+.next/
+out/
+.expo/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Database Backups
+infra/backups/
+*.dump
