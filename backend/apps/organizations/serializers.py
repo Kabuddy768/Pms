@@ -83,6 +83,12 @@ class OrganizationMemberSerializer(serializers.ModelSerializer):
 
 class AddOrganizationMemberSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    full_name = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    password = serializers.CharField(
+        required=False, allow_blank=True, default="", write_only=True
+    )
     role = serializers.ChoiceField(
         choices=OrganizationRole.choices,
         default=OrganizationRole.MANAGER,
@@ -96,12 +102,29 @@ class AddOrganizationMemberSerializer(serializers.Serializer):
         organization = self.context["organization"]
         actor = self.context["actor"]
         email = validated_data["email"]
+        full_name = validated_data.get("full_name", "").strip()
+        password = validated_data.get("password", "")
         role = validated_data["role"]
 
         user = User.objects.filter(email=email).first()
         if not user:
-            raise serializers.ValidationError(
-                {"email": "No registered user found with this email address."}
+            if not password:
+                raise serializers.ValidationError(
+                    {
+                        "email": (
+                            "No registered user found with this email. Enter an initial "
+                            "password (min 8 characters) to create their account directly."
+                        )
+                    }
+                )
+            if len(password) < 8:
+                raise serializers.ValidationError(
+                    {"password": "Password must be at least 8 characters."}
+                )
+            user = User.objects.create_user(
+                email=email,
+                password=password,
+                full_name=full_name or email.split("@")[0],
             )
 
         if OrganizationMembership.objects.filter(

@@ -26,6 +26,8 @@ function TeamContent({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState<OrganizationMember["role"]>("MANAGER");
   const [submitting, setSubmitting] = useState(false);
 
@@ -82,9 +84,16 @@ function TeamContent({
     try {
       await apiFetch("/organizations/members/", {
         method: "POST",
-        body: JSON.stringify({ email, role }),
+        body: JSON.stringify({
+          email,
+          full_name: fullName,
+          password,
+          role,
+        }),
       });
       setEmail("");
+      setFullName("");
+      setPassword("");
       await loadMembers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add member");
@@ -127,9 +136,9 @@ function TeamContent({
           onSubmit={handleAddMember}
           className="bg-white border border-[#E2E8F0] rounded-md p-4 flex flex-wrap items-end gap-3"
         >
-          <div className="flex-1 min-w-[220px]">
+          <div className="flex-1 min-w-[200px]">
             <label className="block text-xs font-medium text-[#475569] mb-1">
-              Registered user email
+              User email
             </label>
             <input
               type="email"
@@ -137,6 +146,30 @@ function TeamContent({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="accountant@kilimani.co.ke"
+              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:border-[#0F5338]"
+            />
+          </div>
+          <div className="flex-1 min-w-[180px]">
+            <label className="block text-xs font-medium text-[#475569] mb-1">
+              Full name <span className="text-[#94A3B8]">(if new user)</span>
+            </label>
+            <input
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Grace Njeri"
+              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:border-[#0F5338]"
+            />
+          </div>
+          <div className="flex-1 min-w-[180px]">
+            <label className="block text-xs font-medium text-[#475569] mb-1">
+              Initial password <span className="text-[#94A3B8]">(if new user)</span>
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Min 8 characters"
               className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:border-[#0F5338]"
             />
           </div>

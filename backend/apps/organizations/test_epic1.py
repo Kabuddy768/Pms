@@ -158,3 +158,19 @@ def test_role_permissions_and_last_owner_protection():
     )
     assert demote_res.status_code == 400
     assert owner_client.get("/api/v1/audit-events/").status_code == 200
+
+    # Owner can provision a brand new user account directly when adding a member
+    add_new = owner_client.post(
+        "/api/v1/organizations/members/",
+        {
+            "email": "newaccountant@org.com",
+            "full_name": "Grace Njeri",
+            "password": "Password123!",
+            "role": OrganizationRole.ACCOUNTANT,
+        },
+        format="json",
+    )
+    assert add_new.status_code == 201
+    assert add_new.data["email"] == "newaccountant@org.com"
+    assert add_new.data["full_name"] == "Grace Njeri"
+    assert add_new.data["role"] == OrganizationRole.ACCOUNTANT
