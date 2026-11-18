@@ -12,7 +12,7 @@ from apps.audit.models import record_audit_event
 from apps.billing.models import Invoice
 from apps.core.tenancy import HasOrganizationMembership, TenantScopedMixin, require_org_roles
 from apps.leasing.models import Lease
-from apps.organizations.models import OrganizationRole
+from apps.organizations.models import Organization, OrganizationRole
 
 from .models import (
     Payment,
@@ -98,7 +98,7 @@ class PaymentViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             if not provided or not hmac.compare_digest(provided, expected_secret):
                 raise PermissionDenied("Invalid M-Pesa callback signature.")
 
-        org = self.get_organization()
+        org = Organization.objects.select_for_update().get(id=self.get_organization().id)
         serializer = MpesaCallbackSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data

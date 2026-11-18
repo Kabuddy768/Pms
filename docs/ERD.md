@@ -60,3 +60,11 @@ erDiagram
    - `DEPOSIT_ACCOUNT` tracks history via append-only `DEPOSIT_TRANSACTION` entries (`RECEIVED`, `DEDUCTED`, `REFUNDED`).
 5. **Sequential Numbering:** Per-organization invoice and receipt sequences use row-level locking (`SELECT ... FOR UPDATE`) on a dedicated sequence counter to prevent race conditions during bulk monthly billing.
 6. **Decimal Arithmetic:** All monetary fields use `Decimal` (`NUMERIC(14, 2)`), never floating-point types.
+7. **URL-Only Media Storage (`ATTACHMENT` — Phase 2):**
+   - Binary files (maintenance photos, inspection photos, expense receipts, signed lease PDFs) are stored in external object storage (Cloudflare R2 / S3 / Cloudinary) and referenced in PostgreSQL strictly by `file_url`, `storage_key`, `content_type`, `file_size_bytes`, `entity_type`, and `entity_id`.
+8. **Composite Indexing & Concurrency Matrix (Phase 2):**
+   - `INVOICE`: composite indexes on `(organization, status, due_date)` and `(organization, billing_period)`.
+   - `PAYMENT`: composite indexes on `(organization, status, received_at)` and `(organization, lease, status)`.
+   - `EXPENSE`: composite index on `(organization, status, expense_date)`.
+   - `MAINTENANCE_REQUEST`: composite index on `(organization, status, priority)`.
+   - Concurrency locks (`SELECT ... FOR UPDATE` + `IntegrityError` handling) on `Organization` unit-cap checks, `generate_monthly` invoice batching, and `mpesa_callback` deduplication.

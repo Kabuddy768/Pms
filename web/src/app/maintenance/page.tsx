@@ -31,9 +31,9 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
 
   const loadAll = async () => {
     const [reqRes, propRes, unitRes] = await Promise.all([
-      apiFetch<PaginatedResponse<MaintenanceRequestItem>>("/maintenance-requests/"),
-      apiFetch<PaginatedResponse<PropertyItem>>("/properties/"),
-      apiFetch<PaginatedResponse<UnitItem>>("/units/"),
+      apiFetch<PaginatedResponse<MaintenanceRequestItem>>("/maintenance-requests/?page_size=200"),
+      apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
+      apiFetch<PaginatedResponse<UnitItem>>("/units/?page_size=200"),
     ]);
     return {
       requests: reqRes.results,

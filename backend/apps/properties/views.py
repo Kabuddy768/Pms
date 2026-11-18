@@ -1,11 +1,13 @@
+from django.db import transaction
 from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.audit.models import record_audit_event
 from apps.core.tenancy import HasOrganizationMembership, TenantScopedMixin, require_org_roles
-from apps.organizations.models import OrganizationRole
+from apps.organizations.models import Organization, OrganizationRole
 
 from .models import Building, Owner, Property, PropertyOwner, PropertyStatus, Unit, UnitStatus
 from .serializers import (
@@ -119,8 +121,19 @@ class UnitViewSet(PortfolioRoleMixin, viewsets.ModelViewSet):
     ordering_fields = ["unit_code", "advertised_rent", "created_at"]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
+    @transaction.atomic
     def perform_create(self, serializer):
-        unit = serializer.save(organization=self.get_organization())
+        org = Organization.objects.select_for_update().get(id=self.get_organization().id)
+        active_units = (
+            Unit.objects.filter(organization=org)
+            .exclude(status=UnitStatus.ARCHIVED)
+            .count()
+        )
+        if active_units >= org.unit_limit:
+            raise ValidationError(
+                {"detail": f"Organization unit limit ({org.unit_limit}) reached."}
+            )
+        unit = serializer.save(organization=org)
         record_audit_event(
             organization=unit.organization,
             actor_user=self.request.user,

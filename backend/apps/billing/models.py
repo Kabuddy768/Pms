@@ -74,6 +74,16 @@ class Invoice(TenantScopedModel):
 
     class Meta:
         ordering = ["-issue_date", "-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "status", "due_date"],
+                name="idx_invoice_org_status_due",
+            ),
+            models.Index(
+                fields=["organization", "billing_period"],
+                name="idx_invoice_org_period",
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "invoice_number"],

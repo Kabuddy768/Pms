@@ -79,6 +79,12 @@ class Expense(TenantScopedModel):
 
     class Meta:
         ordering = ["-expense_date", "-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "status", "expense_date"],
+                name="idx_expense_org_status_date",
+            ),
+        ]
 
     def clean(self):
         if self.property_id and self.property.organization_id != self.organization_id:

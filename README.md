@@ -44,6 +44,7 @@ npx expo start
 ```
 
 ## Documentation
+- [Phase 2 Master Implementation Plan](docs/PHASE2_IMPLEMENTATION_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Database ERD](docs/ERD.md)
 - [Approved Decisions](docs/OPEN_DECISIONS.md)

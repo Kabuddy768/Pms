@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from apps.audit.models import record_audit_event
 from apps.core.tenancy import HasOrganizationMembership, TenantScopedMixin, require_org_roles
 from apps.leasing.models import Lease, LeaseStatus
-from apps.organizations.models import OrganizationRole
+from apps.organizations.models import Organization, OrganizationRole
 from apps.payments.models import Payment, PaymentStatus
 from apps.payments.services import allocate_payment_fifo
 
@@ -93,14 +93,16 @@ class InvoiceViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="generate-monthly")
     @transaction.atomic
     def generate_monthly(self, request):
-        org = self.get_organization()
+        org = Organization.objects.select_for_update().get(id=self.get_organization().id)
         serializer = GenerateMonthlyInvoicesSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         period = serializer.validated_data["billing_period"]
         year, month = (int(x) for x in period.split("-"))
 
-        active_leases = Lease.objects.select_related("unit").filter(
-            organization=org, status=LeaseStatus.ACTIVE
+        active_leases = (
+            Lease.objects.select_for_update()
+            .select_related("unit")
+            .filter(organization=org, status=LeaseStatus.ACTIVE)
         )
 
         created_invoices = []

@@ -36,9 +36,9 @@ function ExpensesContent({
 
   const loadAll = async () => {
     const [expRes, catRes, propRes] = await Promise.all([
-      apiFetch<PaginatedResponse<ExpenseItem>>("/expenses/"),
-      apiFetch<PaginatedResponse<ExpenseCategoryItem>>("/expense-categories/"),
-      apiFetch<PaginatedResponse<PropertyItem>>("/properties/"),
+      apiFetch<PaginatedResponse<ExpenseItem>>("/expenses/?page_size=200"),
+      apiFetch<PaginatedResponse<ExpenseCategoryItem>>("/expense-categories/?page_size=200"),
+      apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
     ]);
     return {
       expenses: expRes.results,

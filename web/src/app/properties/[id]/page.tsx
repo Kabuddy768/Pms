@@ -41,8 +41,8 @@ function PropertyDetailContent({
   const loadAll = async () => {
     const [propRes, bldgRes, unitRes, ownerRes] = await Promise.all([
       apiFetch<PropertyItem>(`/properties/${propertyId}/`),
-      apiFetch<PaginatedResponse<BuildingItem>>(`/buildings/?property=${propertyId}`),
-      apiFetch<PaginatedResponse<UnitItem>>(`/units/?property=${propertyId}`),
+      apiFetch<PaginatedResponse<BuildingItem>>(`/buildings/?property=${propertyId}&page_size=200`),
+      apiFetch<PaginatedResponse<UnitItem>>(`/units/?property=${propertyId}&page_size=200`),
       apiFetch<PropertyOwnerItem[]>(`/properties/${propertyId}/owners/`),
     ]);
     return {

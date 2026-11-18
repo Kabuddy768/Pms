@@ -46,9 +46,9 @@ function LeasesContent({
 
   const loadAll = async () => {
     const [leaseRes, unitRes, tenantRes] = await Promise.all([
-      apiFetch<PaginatedResponse<LeaseItem>>("/leases/"),
-      apiFetch<PaginatedResponse<UnitItem>>("/units/?status=VACANT"),
-      apiFetch<PaginatedResponse<TenantItem>>("/tenants/"),
+      apiFetch<PaginatedResponse<LeaseItem>>("/leases/?page_size=200"),
+      apiFetch<PaginatedResponse<UnitItem>>("/units/?status=VACANT&page_size=200"),
+      apiFetch<PaginatedResponse<TenantItem>>("/tenants/?page_size=200"),
     ]);
     return {
       leases: leaseRes.results,

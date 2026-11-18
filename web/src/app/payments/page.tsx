@@ -44,10 +44,10 @@ function PaymentsContent({
   const canApprove = role === "OWNER" || role === "MANAGER";
 
   const loadData = async (activeTab: "all" | "suspense") => {
-    const query = activeTab === "suspense" ? "?unmatched=true" : "";
+    const query = activeTab === "suspense" ? "?unmatched=true&page_size=200" : "?page_size=200";
     const [payRes, leaseRes] = await Promise.all([
       apiFetch<PaginatedResponse<PaymentItem>>(`/payments/${query}`),
-      apiFetch<PaginatedResponse<LeaseItem>>("/leases/?status=ACTIVE"),
+      apiFetch<PaginatedResponse<LeaseItem>>("/leases/?status=ACTIVE&page_size=200"),
     ]);
     return { payments: payRes.results, leases: leaseRes.results };
   };

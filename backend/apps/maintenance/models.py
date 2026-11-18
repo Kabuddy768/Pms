@@ -72,6 +72,12 @@ class MaintenanceRequest(TenantScopedModel):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "status", "priority"],
+                name="idx_maint_org_status_prio",
+            ),
+        ]
 
     def clean(self):
         if self.property_id and self.property.organization_id != self.organization_id:

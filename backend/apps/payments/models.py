@@ -63,6 +63,16 @@ class Payment(TenantScopedModel):
 
     class Meta:
         ordering = ["-received_at", "-created_at"]
+        indexes = [
+            models.Index(
+                fields=["organization", "status", "received_at"],
+                name="idx_payment_org_status_recv",
+            ),
+            models.Index(
+                fields=["organization", "lease", "status"],
+                name="idx_payment_org_lease_status",
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "payment_reference"],
