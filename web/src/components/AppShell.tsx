@@ -137,7 +137,7 @@ export function AppShell({ children }: AppShellProps) {
     user.memberships.find((m) => m.organization_id === activeOrgId) || null;
 
   const navItems = [
-    { href: "/", label: "Overview" },
+    { href: "/dashboard", label: "Overview" },
     { href: "/properties", label: "Properties" },
     { href: "/tenants", label: "Tenants" },
     { href: "/leases", label: "Leases" },

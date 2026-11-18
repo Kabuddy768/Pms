@@ -459,3 +459,25 @@ export async function apiFetch<T>(
 
   return parsed as T;
 }
+
+export const DEMO_CREDENTIALS = {
+  email: "admin@pms.local",
+  password: "password123",
+} as const;
+
+export async function loginWithCredentials(
+  email: string,
+  password: string
+): Promise<UserProfile> {
+  const tokens = await apiFetch<{ access: string; refresh: string }>("/auth/token/", {
+    method: "POST",
+    includeOrg: false,
+    body: JSON.stringify({ email, password }),
+  });
+  saveAuthTokens(tokens.access, tokens.refresh);
+  const me = await apiFetch<UserProfile>("/auth/me/", { includeOrg: false });
+  if (me.memberships.length > 0) {
+    setActiveOrgId(me.memberships[0].organization_id);
+  }
+  return me;
+}
