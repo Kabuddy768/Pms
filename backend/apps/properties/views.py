@@ -48,7 +48,7 @@ class PropertyViewSet(PortfolioRoleMixin, viewsets.ModelViewSet):
     ).order_by("name")
     filterset_fields = ["property_type", "status", "county"]
     search_fields = ["name", "address", "county", "town"]
-    ordering_fields = ["name", "created_at"]
+    ordering_fields = ["name", "property_type", "status", "created_at"]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def perform_create(self, serializer):

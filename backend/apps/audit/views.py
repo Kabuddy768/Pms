@@ -15,3 +15,4 @@ class AuditEventListView(TenantScopedMixin, generics.ListAPIView):
     queryset = AuditEvent.objects.select_related("actor_user").all()
     filterset_fields = ["action", "entity_type"]
     search_fields = ["action", "entity_type", "actor_user__email"]
+    ordering_fields = ["occurred_at", "action", "entity_type"]

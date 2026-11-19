@@ -57,6 +57,29 @@ export interface HealthCheckResponse {
   database: "ok" | "unavailable";
 }
 
+export interface TenantLedgerEntry {
+  date: string;
+  entry_type: string;
+  reference: string;
+  unit_code: string;
+  description: string;
+  debit: string;
+  credit: string;
+  running_balance: string;
+}
+
+export interface TenantLedger {
+  tenant_id: string;
+  full_name: string;
+  phone: string;
+  email: string;
+  currency: string;
+  total_billed: string;
+  total_paid: string;
+  current_balance: string;
+  entries: TenantLedgerEntry[];
+}
+
 export interface PaginatedResponse<T> {
   count: number;
   next: string | null;

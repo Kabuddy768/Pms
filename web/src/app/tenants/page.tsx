@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { apiFetch, type PaginatedResponse, type TenantItem } from "@/lib/api";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { SlideOver } from "@/components/SlideOver";
+import {
+  apiFetch,
+  formatKES,
+  type PaginatedResponse,
+  type TenantItem,
+  type TenantLedger,
+} from "@/lib/api";
 
 function TenantsContent({
   orgId,
@@ -12,10 +20,19 @@ function TenantsContent({
   role: string | null;
 }) {
   const [tenants, setTenants] = useState<TenantItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [ordering, setOrdering] = useState("full_name");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
+
+  // Tenant Running Ledger drawer
+  const [selectedTenant, setSelectedTenant] = useState<TenantItem | null>(null);
+  const [ledger, setLedger] = useState<TenantLedger | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
 
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -25,21 +42,32 @@ function TenantsContent({
 
   const canWrite = role === "OWNER" || role === "MANAGER" || role === "ACCOUNTANT";
 
-  const fetchTenants = async (q: string) => {
-    const query = q.trim() ? `?search=${encodeURIComponent(q.trim())}` : "";
-    const data = await apiFetch<PaginatedResponse<TenantItem>>(`/tenants/${query}`);
-    return data.results;
-  };
+  const buildQuery = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    if (search.trim()) params.set("search", search.trim());
+    if (statusFilter) params.set("status", statusFilter);
+    if (ordering) params.set("ordering", ordering);
+    return `?${params.toString()}`;
+  }, [page, search, statusFilter, ordering]);
+
+  const reload = useCallback(async () => {
+    const data = await apiFetch<PaginatedResponse<TenantItem>>(
+      `/tenants/${buildQuery()}`
+    );
+    setTenants(data.results);
+    setTotalCount(data.count);
+  }, [buildQuery]);
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
-    fetchTenants(search)
-      .then((results) => {
-        if (!cancelled) {
-          setTenants(results);
-          setError("");
-        }
+    apiFetch<PaginatedResponse<TenantItem>>(`/tenants/${buildQuery()}`)
+      .then((data) => {
+        if (cancelled) return;
+        setTenants(data.results);
+        setTotalCount(data.count);
+        setError("");
       })
       .catch((err) => {
         if (!cancelled) {
@@ -52,7 +80,21 @@ function TenantsContent({
     return () => {
       cancelled = true;
     };
-  }, [orgId, search]);
+  }, [orgId, buildQuery]);
+
+  const handleOpenLedger = async (tenant: TenantItem) => {
+    setSelectedTenant(tenant);
+    setLedger(null);
+    setLedgerLoading(true);
+    try {
+      const data = await apiFetch<TenantLedger>(`/tenants/${tenant.id}/ledger/`);
+      setLedger(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load tenant ledger");
+    } finally {
+      setLedgerLoading(false);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,7 +115,7 @@ function TenantsContent({
       setEmail("");
       setNationalId("");
       setShowForm(false);
-      setTenants(await fetchTenants(search));
+      await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add tenant");
     } finally {
@@ -85,6 +127,47 @@ function TenantsContent({
     return <div className="text-sm text-[#475569]">Select or create an organization.</div>;
   }
 
+  const columns: DataTableColumn<TenantItem>[] = [
+    {
+      key: "full_name",
+      header: "Tenant",
+      sortField: "full_name",
+      render: (t) => <span className="font-medium text-[#0F172A]">{t.full_name}</span>,
+      csvValue: (t) => t.full_name,
+    },
+    {
+      key: "phone",
+      header: "Phone",
+      render: (t) => <span className="font-mono text-xs text-[#0F172A]">{t.phone}</span>,
+      csvValue: (t) => t.phone,
+    },
+    {
+      key: "email",
+      header: "Email",
+      render: (t) => <span className="text-[#475569]">{t.email || "—"}</span>,
+      csvValue: (t) => t.email || "",
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortField: "status",
+      render: (t) => (
+        <span className="px-2 py-0.5 text-xs font-medium rounded border bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]">
+          {t.status}
+        </span>
+      ),
+      csvValue: (t) => t.status,
+    },
+    {
+      key: "ledger",
+      header: "Statement",
+      align: "right",
+      render: () => (
+        <span className="text-xs font-medium text-[#0F5338]">View Ledger &rarr;</span>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E2E8F0] pb-4">
@@ -94,24 +177,15 @@ function TenantsContent({
           </div>
           <h1 className="mt-1 text-2xl font-semibold text-[#0F172A]">Tenants</h1>
         </div>
-        <div className="flex items-center gap-3">
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, phone, email..."
-            className="border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white w-64 focus:outline-none focus:border-[#0F5338]"
-          />
-          {canWrite && (
-            <button
-              type="button"
-              onClick={() => setShowForm((v) => !v)}
-              className="px-3.5 py-1.5 text-sm font-medium bg-[#0F5338] hover:bg-[#0B3F2A] text-white rounded"
-            >
-              {showForm ? "Close" : "+ Add Tenant"}
-            </button>
-          )}
-        </div>
+        {canWrite && (
+          <button
+            type="button"
+            onClick={() => setShowForm((v) => !v)}
+            className="px-3.5 py-1.5 text-sm font-medium bg-[#0F5338] hover:bg-[#0B3F2A] text-white rounded"
+          >
+            {showForm ? "Close" : "+ Add Tenant"}
+          </button>
+        )}
       </div>
 
       {showForm && canWrite && (
@@ -183,46 +257,131 @@ function TenantsContent({
         </div>
       )}
 
-      <div className="bg-white border border-[#E2E8F0] rounded-md overflow-hidden">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead>
-            <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-medium text-[#475569]">
-              <th className="py-2.5 px-4">Tenant</th>
-              <th className="py-2.5 px-4">Phone</th>
-              <th className="py-2.5 px-4">Email</th>
-              <th className="py-2.5 px-4">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#E2E8F0]">
-            {loading ? (
-              <tr>
-                <td colSpan={4} className="py-6 px-4 text-center text-[#64748B]">
-                  Loading tenants...
-                </td>
-              </tr>
-            ) : tenants.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-8 px-4 text-center text-[#64748B]">
-                  No tenants registered yet.
-                </td>
-              </tr>
-            ) : (
-              tenants.map((t) => (
-                <tr key={t.id} className="hover:bg-[#F8FAFC]">
-                  <td className="py-2.5 px-4 font-medium text-[#0F172A]">{t.full_name}</td>
-                  <td className="py-2.5 px-4 font-mono text-xs text-[#0F172A]">{t.phone}</td>
-                  <td className="py-2.5 px-4 text-[#475569]">{t.email || "—"}</td>
-                  <td className="py-2.5 px-4">
-                    <span className="px-2 py-0.5 text-xs font-medium rounded border bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]">
-                      {t.status}
-                    </span>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={tenants}
+        rowKey={(t) => t.id}
+        totalCount={totalCount}
+        page={page}
+        onPageChange={(next) => setPage(next)}
+        searchPlaceholder="Search name, phone, email..."
+        onSearchChange={(val) => {
+          setPage(1);
+          setSearch(val);
+        }}
+        ordering={ordering}
+        onOrderingChange={(next) => {
+          setPage(1);
+          setOrdering(next);
+        }}
+        filters={
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setPage(1);
+              setStatusFilter(e.target.value);
+            }}
+            className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+          >
+            <option value="">All Statuses</option>
+            <option value="ACTIVE">Active</option>
+            <option value="PAST">Past</option>
+          </select>
+        }
+        csvFilename="tenants.csv"
+        loading={loading}
+        emptyMessage="No tenants registered yet."
+        onRowClick={(t) => void handleOpenLedger(t)}
+        selectedRowKey={selectedTenant?.id || null}
+      />
+
+      <SlideOver
+        open={Boolean(selectedTenant)}
+        onClose={() => setSelectedTenant(null)}
+        title={selectedTenant?.full_name || "Tenant Ledger"}
+        subtitle={`Running Statement · ${selectedTenant?.phone || ""}`}
+      >
+        {ledgerLoading ? (
+          <div className="text-xs text-[#64748B]">Loading running ledger...</div>
+        ) : ledger ? (
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[11px] text-[#64748B]">Total Billed</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums text-[#0F172A]">
+                  {formatKES(ledger.total_billed)}
+                </div>
+              </div>
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[11px] text-[#64748B]">Total Credited</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums text-[#047857]">
+                  {formatKES(ledger.total_paid)}
+                </div>
+              </div>
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[11px] text-[#64748B]">Net Balance</div>
+                <div
+                  className={`mt-1 text-sm font-mono font-semibold tabular-nums ${
+                    Number(ledger.current_balance) > 0
+                      ? "text-[#B91C1C]"
+                      : "text-[#047857]"
+                  }`}
+                >
+                  {formatKES(ledger.current_balance)}
+                </div>
+              </div>
+            </div>
+
+            <div className="border border-[#E2E8F0] rounded overflow-hidden">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#475569]">
+                    <th className="py-2 px-3">Date</th>
+                    <th className="py-2 px-3">Ref / Entry</th>
+                    <th className="py-2 px-3 text-right">Debit</th>
+                    <th className="py-2 px-3 text-right">Credit</th>
+                    <th className="py-2 px-3 text-right">Balance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E2E8F0]">
+                  {ledger.entries.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-5 px-3 text-center text-[#64748B]">
+                        No invoices or payments recorded yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    ledger.entries.map((entry, idx) => (
+                      <tr key={`${entry.reference}-${idx}`}>
+                        <td className="py-2 px-3 font-mono tabular-nums text-[#64748B]">
+                          {entry.date}
+                        </td>
+                        <td className="py-2 px-3">
+                          <div className="font-mono text-[#0F172A]">{entry.reference}</div>
+                          <div className="text-[11px] text-[#64748B]">
+                            {entry.unit_code} · {entry.description}
+                          </div>
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono tabular-nums text-[#0F172A]">
+                          {Number(entry.debit) > 0 ? formatKES(entry.debit) : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono tabular-nums text-[#047857]">
+                          {Number(entry.credit) > 0 ? formatKES(entry.credit) : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono tabular-nums font-medium">
+                          {formatKES(entry.running_balance)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-[#B91C1C]">Could not load ledger.</div>
+        )}
+      </SlideOver>
     </div>
   );
 }

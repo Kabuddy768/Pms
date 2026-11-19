@@ -17,6 +17,7 @@ class MaintenanceRequestViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     ).all()
     filterset_fields = ["status", "priority", "property", "unit"]
     search_fields = ["title", "description", "property__name", "unit__unit_code"]
+    ordering_fields = ["priority", "status", "created_at", "updated_at"]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_serializer_context(self):

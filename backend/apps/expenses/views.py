@@ -41,6 +41,7 @@ class ExpenseViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     ).all()
     filterset_fields = ["status", "property", "category"]
     search_fields = ["description", "property__name", "category__name"]
+    ordering_fields = ["expense_date", "amount", "status", "created_at"]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_permissions(self):

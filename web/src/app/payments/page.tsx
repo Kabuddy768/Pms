@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { SlideOver } from "@/components/SlideOver";
 import {
   apiFetch,
   formatKES,
@@ -19,10 +21,18 @@ function PaymentsContent({
 }) {
   const [tab, setTab] = useState<"all" | "suspense">("all");
   const [payments, setPayments] = useState<PaymentItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [methodFilter, setMethodFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [ordering, setOrdering] = useState("-received_at");
+
   const [leases, setLeases] = useState<LeaseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<"none" | "manual" | "mpesa">("none");
+  const [selectedPayment, setSelectedPayment] = useState<PaymentItem | null>(null);
 
   // Manual payment form
   const [leaseId, setLeaseId] = useState("");
@@ -37,29 +47,55 @@ function PaymentsContent({
   const [cbPhone, setCbPhone] = useState("");
   const [cbName, setCbName] = useState("");
 
-  // Assign from suspense
-  const [assignMap, setAssignMap] = useState<Record<string, string>>({});
+  // Suspense assignment inside drawer
+  const [assignLeaseId, setAssignLeaseId] = useState("");
+  const [reverseReason, setReverseReason] = useState("");
 
   const canWrite = role === "OWNER" || role === "MANAGER" || role === "ACCOUNTANT";
   const canApprove = role === "OWNER" || role === "MANAGER";
 
-  const loadData = async (activeTab: "all" | "suspense") => {
-    const query = activeTab === "suspense" ? "?unmatched=true&page_size=200" : "?page_size=200";
-    const [payRes, leaseRes] = await Promise.all([
-      apiFetch<PaginatedResponse<PaymentItem>>(`/payments/${query}`),
-      apiFetch<PaginatedResponse<LeaseItem>>("/leases/?status=ACTIVE&page_size=200"),
-    ]);
-    return { payments: payRes.results, leases: leaseRes.results };
-  };
+  const buildQuery = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    if (tab === "suspense") params.set("unmatched", "true");
+    if (search.trim()) params.set("search", search.trim());
+    if (methodFilter) params.set("method", methodFilter);
+    if (statusFilter) params.set("status", statusFilter);
+    if (ordering) params.set("ordering", ordering);
+    return `?${params.toString()}`;
+  }, [tab, page, search, methodFilter, statusFilter, ordering]);
+
+  const reloadData = useCallback(
+    async (selectId?: string) => {
+      const [payRes, leaseRes] = await Promise.all([
+        apiFetch<PaginatedResponse<PaymentItem>>(`/payments/${buildQuery()}`),
+        apiFetch<PaginatedResponse<LeaseItem>>("/leases/?status=ACTIVE&page_size=200"),
+      ]);
+      setPayments(payRes.results);
+      setTotalCount(payRes.count);
+      setLeases(leaseRes.results);
+      if (selectId) {
+        const updated =
+          payRes.results.find((p) => p.id === selectId) ||
+          (await apiFetch<PaymentItem>(`/payments/${selectId}/`));
+        setSelectedPayment(updated);
+      }
+    },
+    [buildQuery]
+  );
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
-    loadData(tab)
-      .then((res) => {
+    Promise.all([
+      apiFetch<PaginatedResponse<PaymentItem>>(`/payments/${buildQuery()}`),
+      apiFetch<PaginatedResponse<LeaseItem>>("/leases/?status=ACTIVE&page_size=200"),
+    ])
+      .then(([payRes, leaseRes]) => {
         if (cancelled) return;
-        setPayments(res.payments);
-        setLeases(res.leases);
+        setPayments(payRes.results);
+        setTotalCount(payRes.count);
+        setLeases(leaseRes.results);
         setError("");
       })
       .catch((err) => {
@@ -73,7 +109,7 @@ function PaymentsContent({
     return () => {
       cancelled = true;
     };
-  }, [orgId, tab]);
+  }, [orgId, buildQuery]);
 
   const handleManualPayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,8 +128,7 @@ function PaymentsContent({
       setRef("");
       setAmount("");
       setMode("none");
-      const res = await loadData(tab);
-      setPayments(res.payments);
+      await reloadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not record payment");
     }
@@ -117,38 +152,40 @@ function PaymentsContent({
       setCbAmount("");
       setCbBillRef("");
       setMode("none");
-      const res = await loadData(tab);
-      setPayments(res.payments);
+      await reloadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Callback failed");
     }
   };
 
-  const handleAssign = async (paymentId: string) => {
-    const targetLease = assignMap[paymentId];
-    if (!targetLease) return;
+  const handleAssign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPayment || !assignLeaseId) return;
     setError("");
     try {
-      await apiFetch(`/payments/${paymentId}/assign/`, {
+      await apiFetch(`/payments/${selectedPayment.id}/assign/`, {
         method: "POST",
-        body: JSON.stringify({ lease: targetLease, auto_allocate: true }),
+        body: JSON.stringify({ lease: assignLeaseId, auto_allocate: true }),
       });
-      const res = await loadData(tab);
-      setPayments(res.payments);
+      setAssignLeaseId("");
+      await reloadData(selectedPayment.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Assignment failed");
     }
   };
 
-  const handleReverse = async (paymentId: string) => {
+  const handleReverse = async () => {
+    if (!selectedPayment) return;
     setError("");
     try {
-      await apiFetch(`/payments/${paymentId}/reverse/`, {
+      await apiFetch(`/payments/${selectedPayment.id}/reverse/`, {
         method: "POST",
-        body: JSON.stringify({ reason: "Reversed from back-office" }),
+        body: JSON.stringify({
+          reason: reverseReason.trim() || "Reversed from back-office",
+        }),
       });
-      const res = await loadData(tab);
-      setPayments(res.payments);
+      setReverseReason("");
+      await reloadData(selectedPayment.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reversal failed");
     }
@@ -157,6 +194,105 @@ function PaymentsContent({
   if (!orgId) {
     return <div className="text-sm text-[#475569]">Select or create an organization.</div>;
   }
+
+  const columns: DataTableColumn<PaymentItem>[] = [
+    {
+      key: "receipt_number",
+      header: "Receipt #",
+      sortField: "receipt_number",
+      render: (p) => (
+        <span className="font-mono text-xs text-[#0F5338]">
+          {p.receipt_number || "—"}
+        </span>
+      ),
+      csvValue: (p) => p.receipt_number || "",
+    },
+    {
+      key: "payment_reference",
+      header: "Ref / Method",
+      sortField: "payment_reference",
+      render: (p) => (
+        <div>
+          <div className="font-mono text-xs text-[#0F172A]">{p.payment_reference}</div>
+          <div className="text-[11px] text-[#64748B]">{p.method}</div>
+        </div>
+      ),
+      csvValue: (p) => `${p.payment_reference} (${p.method})`,
+    },
+    {
+      key: "payer",
+      header: "Lease / Payer",
+      render: (p) =>
+        p.is_matched ? (
+          <div>
+            <span className="font-mono text-xs text-[#0F172A]">{p.unit_code}</span>{" "}
+            <span className="text-xs text-[#475569]">· {p.tenant_name}</span>
+          </div>
+        ) : (
+          <div className="text-xs">
+            <span className="px-1.5 py-0.5 rounded bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] font-medium">
+              UNMATCHED
+            </span>{" "}
+            <span className="font-mono text-[#475569]">
+              Ref:&ldquo;{p.raw_account_ref}&rdquo; · {p.payer_phone}
+            </span>
+          </div>
+        ),
+      csvValue: (p) =>
+        p.is_matched
+          ? `${p.unit_code} - ${p.tenant_name}`
+          : `UNMATCHED (${p.raw_account_ref})`,
+    },
+    {
+      key: "received_at",
+      header: "Received",
+      sortField: "received_at",
+      render: (p) => (
+        <span className="font-mono text-xs text-[#64748B] tabular-nums">
+          {new Date(p.received_at).toLocaleDateString("en-KE")}
+        </span>
+      ),
+      csvValue: (p) => p.received_at,
+    },
+    {
+      key: "amount",
+      header: "Amount",
+      align: "right",
+      sortField: "amount",
+      render: (p) => (
+        <span className="font-mono tabular-nums font-medium">{formatKES(p.amount)}</span>
+      ),
+      csvValue: (p) => p.amount,
+    },
+    {
+      key: "unallocated",
+      header: "Unallocated",
+      align: "right",
+      render: (p) => (
+        <span className="font-mono tabular-nums text-[#64748B]">
+          {formatKES(p.unallocated_amount)}
+        </span>
+      ),
+      csvValue: (p) => p.unallocated_amount,
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortField: "status",
+      render: (p) => (
+        <span
+          className={`px-2 py-0.5 text-xs font-medium rounded border ${
+            p.status === "CONFIRMED"
+              ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
+              : "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]"
+          }`}
+        >
+          {p.status}
+        </span>
+      ),
+      csvValue: (p) => p.status,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -192,7 +328,10 @@ function PaymentsContent({
       <div className="flex border-b border-[#E2E8F0] text-sm">
         <button
           type="button"
-          onClick={() => setTab("all")}
+          onClick={() => {
+            setPage(1);
+            setTab("all");
+          }}
           className={`pb-2 px-4 font-medium border-b-2 ${
             tab === "all"
               ? "border-[#0F5338] text-[#0F5338]"
@@ -203,14 +342,17 @@ function PaymentsContent({
         </button>
         <button
           type="button"
-          onClick={() => setTab("suspense")}
+          onClick={() => {
+            setPage(1);
+            setTab("suspense");
+          }}
           className={`pb-2 px-4 font-medium border-b-2 ${
             tab === "suspense"
               ? "border-[#0F5338] text-[#0F5338]"
               : "border-transparent text-[#64748B]"
           }`}
         >
-          Unmatched / Suspense Queue
+          Suspense / Unmatched Queue
         </button>
       </div>
 
@@ -219,29 +361,29 @@ function PaymentsContent({
           onSubmit={handleManualPayment}
           className="bg-white border border-[#E2E8F0] rounded-md p-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-end"
         >
-          <div className="md:col-span-2">
-            <label className="block text-xs font-medium text-[#475569] mb-1">
-              Lease (Optional — leave blank for Suspense)
-            </label>
+          <div>
+            <label className="block text-xs font-medium text-[#475569] mb-1">Lease</label>
             <select
               value={leaseId}
               onChange={(e) => setLeaseId(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm bg-white"
             >
-              <option value="">Unmatched (Suspense)</option>
+              <option value="">Leave Unmatched (Suspense)</option>
               {leases.map((l) => (
                 <option key={l.id} value={l.id}>
-                  {l.unit_code} — {l.occupants[0]?.tenant_name || l.property_name}
+                  {l.unit_code} · {l.occupants[0]?.tenant_name}
                 </option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-[#475569] mb-1">Method</label>
+            <label className="block text-xs font-medium text-[#475569] mb-1">
+              Method
+            </label>
             <select
               value={method}
               onChange={(e) => setMethod(e.target.value as PaymentItem["method"])}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm bg-white"
             >
               <option value="MPESA_PAYBILL">M-Pesa Paybill</option>
               <option value="BANK_TRANSFER">Bank Transfer</option>
@@ -251,51 +393,15 @@ function PaymentsContent({
           </div>
           <div>
             <label className="block text-xs font-medium text-[#475569] mb-1">
-              Reference (e.g. SJK...)
+              Reference (Unique)
             </label>
             <input
               type="text"
               required
               value={ref}
               onChange={(e) => setRef(e.target.value)}
-              placeholder="SJK89123XY"
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm font-mono uppercase"
-            />
-          </div>
-          <div className="flex gap-2">
-            <input
-              type="number"
-              step="0.01"
-              required
-              placeholder="KES Amount"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm font-mono tabular-nums"
-            />
-            <button
-              type="submit"
-              className="px-4 py-1.5 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-sm font-medium rounded shrink-0"
-            >
-              Save
-            </button>
-          </div>
-        </form>
-      )}
-
-      {mode === "mpesa" && canWrite && (
-        <form
-          onSubmit={handleMpesaCallback}
-          className="bg-white border border-[#E2E8F0] rounded-md p-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end"
-        >
-          <div>
-            <label className="block text-xs font-medium text-[#475569] mb-1">TransID</label>
-            <input
-              type="text"
-              required
-              value={cbTransId}
-              onChange={(e) => setCbTransId(e.target.value)}
-              placeholder="TKL998811"
-              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs font-mono uppercase"
+              placeholder="SGH819KL01"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono bg-white"
             />
           </div>
           <div>
@@ -306,49 +412,67 @@ function PaymentsContent({
               type="number"
               step="0.01"
               required
-              value={cbAmount}
-              onChange={(e) => setCbAmount(e.target.value)}
-              placeholder="30000.00"
-              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs font-mono tabular-nums"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[#475569] mb-1">
-              BillRefNumber
-            </label>
-            <input
-              type="text"
-              value={cbBillRef}
-              onChange={(e) => setCbBillRef(e.target.value)}
-              placeholder="Hse A1"
-              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs font-mono"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[#475569] mb-1">MSISDN</label>
-            <input
-              type="text"
-              value={cbPhone}
-              onChange={(e) => setCbPhone(e.target.value)}
-              placeholder="254712345678"
-              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs font-mono"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[#475569] mb-1">
-              Payer Name
-            </label>
-            <input
-              type="text"
-              value={cbName}
-              onChange={(e) => setCbName(e.target.value)}
-              placeholder="GRACE"
-              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="25000.00"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono bg-white"
             />
           </div>
           <button
             type="submit"
-            className="py-1.5 px-3 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-xs font-medium rounded"
+            className="py-1.5 px-4 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-sm font-medium rounded"
+          >
+            Save &amp; Auto-Allocate
+          </button>
+        </form>
+      )}
+
+      {mode === "mpesa" && canWrite && (
+        <form
+          onSubmit={handleMpesaCallback}
+          className="bg-white border border-[#E2E8F0] rounded-md p-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end"
+        >
+          <input
+            type="text"
+            required
+            placeholder="TransID (e.g. MPESA991)"
+            value={cbTransId}
+            onChange={(e) => setCbTransId(e.target.value)}
+            className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono"
+          />
+          <input
+            type="number"
+            step="0.01"
+            required
+            placeholder="Amount"
+            value={cbAmount}
+            onChange={(e) => setCbAmount(e.target.value)}
+            className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono"
+          />
+          <input
+            type="text"
+            placeholder="BillRef (e.g. A1 or typo)"
+            value={cbBillRef}
+            onChange={(e) => setCbBillRef(e.target.value)}
+            className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono"
+          />
+          <input
+            type="text"
+            placeholder="MSISDN (2547...)"
+            value={cbPhone}
+            onChange={(e) => setCbPhone(e.target.value)}
+            className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono"
+          />
+          <input
+            type="text"
+            placeholder="Payer First Name"
+            value={cbName}
+            onChange={(e) => setCbName(e.target.value)}
+            className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm"
+          />
+          <button
+            type="submit"
+            className="py-1.5 px-3 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-sm font-medium rounded"
           >
             Send C2B Webhook
           </button>
@@ -361,127 +485,200 @@ function PaymentsContent({
         </div>
       )}
 
-      <div className="bg-white border border-[#E2E8F0] rounded-md overflow-hidden">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead>
-            <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-medium text-[#475569]">
-              <th className="py-2.5 px-4">Receipt / Ref</th>
-              <th className="py-2.5 px-4">Method</th>
-              <th className="py-2.5 px-4">Lease / Payer</th>
-              <th className="py-2.5 px-4 text-right">Amount</th>
-              <th className="py-2.5 px-4 text-right">Unallocated</th>
-              <th className="py-2.5 px-4">Status / Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#E2E8F0]">
-            {loading ? (
-              <tr>
-                <td colSpan={6} className="py-6 px-4 text-center text-[#64748B]">
-                  Loading payments...
-                </td>
-              </tr>
-            ) : payments.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="py-8 px-4 text-center text-[#64748B]">
-                  {tab === "suspense"
-                    ? "No unmatched payments in Suspense."
-                    : "No payments recorded yet."}
-                </td>
-              </tr>
-            ) : (
-              payments.map((p) => (
-                <tr key={p.id} className="hover:bg-[#F8FAFC]">
-                  <td className="py-2.5 px-4">
-                    <div className="font-mono text-xs font-medium text-[#0F172A]">
-                      {p.receipt_number || "—"}
-                    </div>
-                    <div className="font-mono text-xs text-[#64748B]">
-                      {p.payment_reference}
-                    </div>
-                  </td>
-                  <td className="py-2.5 px-4 text-xs font-mono text-[#475569]">
-                    {p.method}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    {p.is_matched ? (
-                      <div>
-                        <span className="font-mono font-medium text-[#0F172A]">
-                          {p.unit_code}
-                        </span>{" "}
-                        <span className="text-[#475569]">• {p.tenant_name || "—"}</span>
-                      </div>
-                    ) : (
-                      <div className="space-y-1">
-                        <span className="px-2 py-0.5 text-[11px] font-medium rounded border bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]">
-                          UNMATCHED ({p.raw_account_ref || p.payer_phone || "No ref"})
-                        </span>
-                        {canWrite && p.status === "CONFIRMED" && (
-                          <div className="flex gap-1.5 pt-1">
-                            <select
-                              value={assignMap[p.id] || ""}
-                              onChange={(e) =>
-                                setAssignMap((prev) => ({
-                                  ...prev,
-                                  [p.id]: e.target.value,
-                                }))
-                              }
-                              className="border border-[#CBD5E1] rounded px-2 py-0.5 text-xs bg-white"
-                            >
-                              <option value="">Assign lease...</option>
-                              {leases.map((l) => (
-                                <option key={l.id} value={l.id}>
-                                  {l.unit_code} ({l.occupants[0]?.tenant_name || "Lease"})
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() => handleAssign(p.id)}
-                              className="px-2 py-0.5 text-xs font-medium bg-[#0F5338] text-white rounded"
-                            >
-                              Match
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-4 text-right font-mono tabular-nums font-medium text-[#0F172A]">
-                    {formatKES(p.amount)}
-                  </td>
-                  <td className="py-2.5 px-4 text-right font-mono tabular-nums text-[#475569]">
-                    {formatKES(p.unallocated_amount)}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`px-2 py-0.5 text-xs font-medium rounded border ${
-                          p.status === "CONFIRMED"
-                            ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
-                            : p.status === "REVERSED"
-                            ? "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]"
-                            : "bg-[#F1F5F9] text-[#475569] border-[#CBD5E1]"
-                        }`}
-                      >
-                        {p.status}
+      <DataTable
+        columns={columns}
+        rows={payments}
+        rowKey={(p) => p.id}
+        totalCount={totalCount}
+        page={page}
+        onPageChange={(next) => setPage(next)}
+        searchPlaceholder="Search receipt, M-Pesa ref, phone, payer..."
+        onSearchChange={(val) => {
+          setPage(1);
+          setSearch(val);
+        }}
+        ordering={ordering}
+        onOrderingChange={(next) => {
+          setPage(1);
+          setOrdering(next);
+        }}
+        filters={
+          <>
+            <select
+              value={methodFilter}
+              onChange={(e) => {
+                setPage(1);
+                setMethodFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Methods</option>
+              <option value="MPESA_PAYBILL">M-Pesa Paybill</option>
+              <option value="BANK_TRANSFER">Bank Transfer</option>
+              <option value="CASH">Cash</option>
+              <option value="CHEQUE">Cheque</option>
+            </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setPage(1);
+                setStatusFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Statuses</option>
+              <option value="CONFIRMED">Confirmed</option>
+              <option value="REVERSED">Reversed</option>
+              <option value="PENDING">Pending</option>
+            </select>
+          </>
+        }
+        csvFilename="payments.csv"
+        loading={loading}
+        emptyMessage="No payments match your filters."
+        onRowClick={(p) => setSelectedPayment(p)}
+        selectedRowKey={selectedPayment?.id || null}
+      />
+
+      <SlideOver
+        open={Boolean(selectedPayment)}
+        onClose={() => setSelectedPayment(null)}
+        title={
+          selectedPayment?.receipt_number ||
+          selectedPayment?.payment_reference ||
+          "Payment Detail"
+        }
+        subtitle={
+          selectedPayment
+            ? `${selectedPayment.method} · ${selectedPayment.status}`
+            : ""
+        }
+      >
+        {selectedPayment && (
+          <div className="space-y-5 text-xs">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[#64748B]">Amount</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums">
+                  {formatKES(selectedPayment.amount)}
+                </div>
+              </div>
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[#64748B]">Allocated</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums text-[#047857]">
+                  {formatKES(selectedPayment.allocated_amount)}
+                </div>
+              </div>
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[#64748B]">Unallocated</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums text-[#B45309]">
+                  {formatKES(selectedPayment.unallocated_amount)}
+                </div>
+              </div>
+            </div>
+
+            <div className="border border-[#E2E8F0] rounded p-3 space-y-1.5">
+              <div>
+                <span className="text-[#64748B]">Reference:</span>{" "}
+                <span className="font-mono text-[#0F172A]">
+                  {selectedPayment.payment_reference}
+                </span>
+              </div>
+              <div>
+                <span className="text-[#64748B]">Payer:</span>{" "}
+                <span>
+                  {selectedPayment.payer_name || selectedPayment.tenant_name || "—"}{" "}
+                  {selectedPayment.payer_phone
+                    ? `(${selectedPayment.payer_phone})`
+                    : ""}
+                </span>
+              </div>
+              <div>
+                <span className="text-[#64748B]">Raw Account Ref:</span>{" "}
+                <span className="font-mono">
+                  {selectedPayment.raw_account_ref || "—"}
+                </span>
+              </div>
+            </div>
+
+            {!selectedPayment.is_matched &&
+              selectedPayment.status === "CONFIRMED" &&
+              canWrite && (
+                <form
+                  onSubmit={handleAssign}
+                  className="border border-[#FDE68A] bg-[#FFFBEB] rounded p-3 space-y-2"
+                >
+                  <div className="font-semibold text-[#B45309]">
+                    Assign Unmatched Payment from Suspense
+                  </div>
+                  <select
+                    required
+                    value={assignLeaseId}
+                    onChange={(e) => setAssignLeaseId(e.target.value)}
+                    className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 bg-white"
+                  >
+                    <option value="">Select active lease...</option>
+                    {leases.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.unit_code} · {l.occupants[0]?.tenant_name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-[#0F5338] hover:bg-[#0B3F2A] text-white font-medium rounded"
+                  >
+                    Match Lease &amp; Allocate FIFO
+                  </button>
+                </form>
+              )}
+
+            <div>
+              <div className="font-medium text-[#0F172A] mb-2">
+                Allocations ({selectedPayment.allocations.length})
+              </div>
+              <div className="border border-[#E2E8F0] rounded divide-y divide-[#E2E8F0]">
+                {selectedPayment.allocations.length === 0 ? (
+                  <div className="p-3 text-[#64748B]">No invoice allocations yet.</div>
+                ) : (
+                  selectedPayment.allocations.map((a) => (
+                    <div key={a.id} className="p-2.5 flex justify-between">
+                      <span className="font-mono">
+                        {a.invoice_number} ({a.status})
                       </span>
-                      {canApprove && p.status === "CONFIRMED" && (
-                        <button
-                          type="button"
-                          onClick={() => handleReverse(p.id)}
-                          className="text-xs text-[#B91C1C] hover:underline"
-                        >
-                          Reverse
-                        </button>
-                      )}
+                      <span className="font-mono tabular-nums">
+                        {formatKES(a.amount)}
+                      </span>
                     </div>
-                  </td>
-                </tr>
-              ))
+                  ))
+                )}
+              </div>
+            </div>
+
+            {canApprove && selectedPayment.status === "CONFIRMED" && (
+              <div className="pt-4 border-t border-[#E2E8F0] space-y-2">
+                <div className="font-semibold text-[#B91C1C]">
+                  Reverse Payment (Immutable Ledger)
+                </div>
+                <input
+                  type="text"
+                  placeholder="Reversal reason (optional)"
+                  value={reverseReason}
+                  onChange={(e) => setReverseReason(e.target.value)}
+                  className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={handleReverse}
+                  className="w-full py-1.5 border border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C] font-medium rounded"
+                >
+                  Reverse Payment
+                </button>
+              </div>
             )}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        )}
+      </SlideOver>
     </div>
   );
 }

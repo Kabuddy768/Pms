@@ -58,6 +58,15 @@ class PaymentViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         "payer_phone",
         "raw_account_ref",
     ]
+    ordering_fields = [
+        "payment_reference",
+        "receipt_number",
+        "amount",
+        "method",
+        "status",
+        "received_at",
+        "created_at",
+    ]
     http_method_names = ["get", "post", "head", "options"]
 
     def get_permissions(self):

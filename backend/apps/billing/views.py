@@ -56,6 +56,15 @@ class InvoiceViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         "lease__unit__unit_code",
         "lease__occupants__tenant__full_name",
     ]
+    ordering_fields = [
+        "invoice_number",
+        "billing_period",
+        "issue_date",
+        "due_date",
+        "total_amount",
+        "status",
+        "created_at",
+    ]
     http_method_names = ["get", "post", "head", "options"]
 
     def get_permissions(self):

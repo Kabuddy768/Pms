@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { SlideOver } from "@/components/SlideOver";
 import {
   apiFetch,
   formatKES,
@@ -17,14 +19,21 @@ function InvoicesContent({
   role: string | null;
 }) {
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [periodFilter, setPeriodFilter] = useState("");
+  const [ordering, setOrdering] = useState("-issue_date");
   const [selected, setSelected] = useState<InvoiceItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
   const [period, setPeriod] = useState("2026-11");
   const [generating, setGenerating] = useState(false);
 
-  // Adjustment form
+  // Adjustment form inside SlideOver
   const [adjType, setAdjType] = useState<"CREDIT" | "DEBIT">("CREDIT");
   const [adjAmount, setAdjAmount] = useState("");
   const [adjReason, setAdjReason] = useState("");
@@ -32,18 +41,32 @@ function InvoicesContent({
   const canWrite = role === "OWNER" || role === "MANAGER" || role === "ACCOUNTANT";
   const canApprove = role === "OWNER" || role === "MANAGER";
 
-  const fetchInvoices = async () => {
-    const data = await apiFetch<PaginatedResponse<InvoiceItem>>("/invoices/");
-    return data.results;
-  };
+  const buildQuery = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    if (search.trim()) params.set("search", search.trim());
+    if (statusFilter) params.set("status", statusFilter);
+    if (periodFilter) params.set("billing_period", periodFilter);
+    if (ordering) params.set("ordering", ordering);
+    return `?${params.toString()}`;
+  }, [page, search, statusFilter, periodFilter, ordering]);
+
+  const reload = useCallback(async () => {
+    const data = await apiFetch<PaginatedResponse<InvoiceItem>>(
+      `/invoices/${buildQuery()}`
+    );
+    setInvoices(data.results);
+    setTotalCount(data.count);
+  }, [buildQuery]);
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
-    fetchInvoices()
-      .then((results) => {
+    apiFetch<PaginatedResponse<InvoiceItem>>(`/invoices/${buildQuery()}`)
+      .then((data) => {
         if (!cancelled) {
-          setInvoices(results);
+          setInvoices(data.results);
+          setTotalCount(data.count);
           setError("");
         }
       })
@@ -58,7 +81,7 @@ function InvoicesContent({
     return () => {
       cancelled = true;
     };
-  }, [orgId]);
+  }, [orgId, buildQuery]);
 
   const handleGenerateMonthly = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,8 +99,7 @@ function InvoicesContent({
       setNotice(
         `Generated ${res.created_count} invoice(s) for ${period} (${res.skipped_count} already billed).`
       );
-      const updated = await fetchInvoices();
-      setInvoices(updated);
+      await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate invoices");
     } finally {
@@ -104,7 +126,7 @@ function InvoicesContent({
       setAdjAmount("");
       setAdjReason("");
       setSelected(updatedInv);
-      setInvoices(await fetchInvoices());
+      await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not issue adjustment");
     }
@@ -113,6 +135,93 @@ function InvoicesContent({
   if (!orgId) {
     return <div className="text-sm text-[#475569]">Select or create an organization.</div>;
   }
+
+  const columns: DataTableColumn<InvoiceItem>[] = [
+    {
+      key: "invoice_number",
+      header: "Invoice #",
+      sortField: "invoice_number",
+      render: (inv) => (
+        <span className="font-mono text-xs font-medium text-[#0F5338]">
+          {inv.invoice_number}
+        </span>
+      ),
+      csvValue: (inv) => inv.invoice_number,
+    },
+    {
+      key: "unit_tenant",
+      header: "Unit / Tenant",
+      render: (inv) => (
+        <div>
+          <span className="font-mono text-xs text-[#0F172A]">{inv.unit_code}</span>{" "}
+          <span className="text-xs text-[#475569]">· {inv.tenant_name}</span>
+        </div>
+      ),
+      csvValue: (inv) => `${inv.unit_code} - ${inv.tenant_name}`,
+    },
+    {
+      key: "billing_period",
+      header: "Period",
+      sortField: "billing_period",
+      render: (inv) => (
+        <span className="font-mono text-xs text-[#64748B] tabular-nums">
+          {inv.billing_period || "—"}
+        </span>
+      ),
+      csvValue: (inv) => inv.billing_period || "",
+    },
+    {
+      key: "due_date",
+      header: "Due Date",
+      sortField: "due_date",
+      render: (inv) => (
+        <span className="font-mono text-xs text-[#64748B] tabular-nums">
+          {inv.due_date}
+        </span>
+      ),
+      csvValue: (inv) => inv.due_date,
+    },
+    {
+      key: "total",
+      header: "Adjusted Total",
+      align: "right",
+      sortField: "total_amount",
+      render: (inv) => (
+        <span className="font-mono tabular-nums">{formatKES(inv.adjusted_total)}</span>
+      ),
+      csvValue: (inv) => inv.adjusted_total,
+    },
+    {
+      key: "balance",
+      header: "Balance",
+      align: "right",
+      render: (inv) => (
+        <span className="font-mono tabular-nums font-medium">
+          {formatKES(inv.outstanding_balance)}
+        </span>
+      ),
+      csvValue: (inv) => inv.outstanding_balance,
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortField: "status",
+      render: (inv) => (
+        <span
+          className={`px-2 py-0.5 text-xs font-medium rounded border ${
+            inv.status === "PAID"
+              ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
+              : inv.status === "PARTIAL"
+              ? "bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]"
+              : "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]"
+          }`}
+        >
+          {inv.status}
+        </span>
+      ),
+      csvValue: (inv) => inv.status,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -155,182 +264,184 @@ function InvoicesContent({
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-        <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-md overflow-hidden">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-medium text-[#475569]">
-                <th className="py-2.5 px-4">Invoice #</th>
-                <th className="py-2.5 px-4">Unit / Tenant</th>
-                <th className="py-2.5 px-4">Due Date</th>
-                <th className="py-2.5 px-4 text-right">Total</th>
-                <th className="py-2.5 px-4 text-right">Balance</th>
-                <th className="py-2.5 px-4">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#E2E8F0]">
-              {loading ? (
-                <tr>
-                  <td colSpan={6} className="py-6 px-4 text-center text-[#64748B]">
-                    Loading invoices...
-                  </td>
-                </tr>
-              ) : invoices.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-8 px-4 text-center text-[#64748B]">
-                    No invoices issued yet. Use &ldquo;Generate Monthly Rent&rdquo; above.
-                  </td>
-                </tr>
-              ) : (
-                invoices.map((inv) => (
-                  <tr
-                    key={inv.id}
-                    onClick={() => setSelected(inv)}
-                    className={`cursor-pointer hover:bg-[#F8FAFC] ${
-                      selected?.id === inv.id ? "bg-[#F1F5F9]" : ""
-                    }`}
-                  >
-                    <td className="py-2.5 px-4 font-mono text-xs font-medium text-[#0F172A]">
-                      {inv.invoice_number}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <div className="font-medium text-[#0F172A]">
-                        {inv.unit_code} • {inv.tenant_name}
-                      </div>
-                      <div className="text-xs text-[#64748B]">{inv.property_name}</div>
-                    </td>
-                    <td className="py-2.5 px-4 font-mono text-xs text-[#475569] tabular-nums">
-                      {inv.due_date}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-[#0F172A]">
-                      {formatKES(inv.adjusted_total)}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums font-medium text-[#0F172A]">
-                      {formatKES(inv.outstanding_balance)}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span
-                        className={`px-2 py-0.5 text-xs font-medium rounded border ${
-                          inv.status === "PAID"
-                            ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
-                            : inv.status === "PARTIAL"
-                            ? "bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]"
-                            : inv.status === "ISSUED"
-                            ? "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]"
-                            : "bg-[#F1F5F9] text-[#475569] border-[#CBD5E1]"
-                        }`}
-                      >
-                        {inv.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+      <DataTable
+        columns={columns}
+        rows={invoices}
+        rowKey={(inv) => inv.id}
+        totalCount={totalCount}
+        page={page}
+        onPageChange={(next) => setPage(next)}
+        searchPlaceholder="Search invoice #, unit, tenant..."
+        onSearchChange={(val) => {
+          setPage(1);
+          setSearch(val);
+        }}
+        ordering={ordering}
+        onOrderingChange={(next) => {
+          setPage(1);
+          setOrdering(next);
+        }}
+        filters={
+          <>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setPage(1);
+                setStatusFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Statuses</option>
+              <option value="ISSUED">Issued</option>
+              <option value="PARTIAL">Partial</option>
+              <option value="PAID">Paid</option>
+              <option value="VOID">Void</option>
+            </select>
+            <input
+              type="month"
+              value={periodFilter}
+              onChange={(e) => {
+                setPage(1);
+                setPeriodFilter(e.target.value);
+              }}
+              aria-label="Filter by billing period"
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs font-mono bg-white"
+            />
+            {periodFilter && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPage(1);
+                  setPeriodFilter("");
+                }}
+                className="text-xs text-[#64748B] hover:text-[#0F172A]"
+              >
+                Clear month
+              </button>
+            )}
+          </>
+        }
+        csvFilename="invoices.csv"
+        loading={loading}
+        emptyMessage="No invoices match your filters."
+        onRowClick={(inv) => setSelected(inv)}
+        selectedRowKey={selected?.id || null}
+      />
 
-        {/* Invoice Inspector Drawer */}
-        <div className="bg-white border border-[#E2E8F0] rounded-md p-4 space-y-4">
-          {!selected ? (
-            <div className="text-xs text-[#64748B]">
-              Select an invoice row to inspect line items or issue a credit/debit note.
-            </div>
-          ) : (
-            <>
-              <div className="border-b border-[#E2E8F0] pb-3">
-                <div className="font-mono text-xs text-[#64748B]">
-                  {selected.invoice_number}
-                </div>
-                <div className="text-base font-semibold text-[#0F172A]">
-                  {selected.unit_code} — {selected.tenant_name}
-                </div>
-                <div className="mt-1 text-xs text-[#475569] flex justify-between font-mono tabular-nums">
-                  <span>Paid: {formatKES(selected.allocated_amount)}</span>
-                  <span>Due: {formatKES(selected.outstanding_balance)}</span>
+      <SlideOver
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+        title={selected?.invoice_number || "Invoice Detail"}
+        subtitle={
+          selected
+            ? `${selected.property_name} · Unit ${selected.unit_code} · ${selected.tenant_name}`
+            : ""
+        }
+      >
+        {selected && (
+          <div className="space-y-5 text-xs">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[#64748B]">Adjusted Total</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums">
+                  {formatKES(selected.adjusted_total)}
                 </div>
               </div>
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[#64748B]">Allocated</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums text-[#047857]">
+                  {formatKES(selected.allocated_amount)}
+                </div>
+              </div>
+              <div className="border border-[#E2E8F0] rounded p-3">
+                <div className="text-[#64748B]">Balance Due</div>
+                <div className="mt-1 text-sm font-mono font-semibold tabular-nums text-[#B91C1C]">
+                  {formatKES(selected.outstanding_balance)}
+                </div>
+              </div>
+            </div>
 
-              <div className="space-y-1.5">
-                <div className="text-xs font-semibold text-[#0F172A]">Line Items</div>
+            <div>
+              <div className="font-medium text-[#0F172A] mb-2">Line Items</div>
+              <div className="border border-[#E2E8F0] rounded divide-y divide-[#E2E8F0]">
                 {selected.lines.map((line) => (
-                  <div key={line.id} className="flex justify-between text-xs">
+                  <div key={line.id} className="p-2.5 flex justify-between">
                     <span className="text-[#475569]">{line.description}</span>
-                    <span className="font-mono tabular-nums text-[#0F172A]">
+                    <span className="font-mono tabular-nums">
                       {formatKES(line.line_total)}
                     </span>
                   </div>
                 ))}
               </div>
+            </div>
 
-              {selected.adjustments.length > 0 && (
-                <div className="pt-2 border-t border-[#E2E8F0] space-y-1.5">
-                  <div className="text-xs font-semibold text-[#0F172A]">
-                    Adjustments
-                  </div>
+            {selected.adjustments.length > 0 && (
+              <div>
+                <div className="font-medium text-[#0F172A] mb-2">
+                  Adjustments (Immutable)
+                </div>
+                <div className="border border-[#E2E8F0] rounded divide-y divide-[#E2E8F0]">
                   {selected.adjustments.map((adj) => (
-                    <div key={adj.id} className="flex justify-between text-xs">
-                      <span className="text-[#475569]">
-                        {adj.adjustment_type}: {adj.reason}
+                    <div key={adj.id} className="p-2.5 flex justify-between">
+                      <span>
+                        <span className="font-mono font-medium">{adj.adjustment_type}</span>{" "}
+                        · {adj.reason}
                       </span>
                       <span className="font-mono tabular-nums">
-                        {adj.adjustment_type === "CREDIT" ? "-" : "+"}
                         {formatKES(adj.amount)}
                       </span>
                     </div>
                   ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {canApprove && selected.status !== "VOID" && (
-                <form
-                  onSubmit={handleAdjustment}
-                  className="pt-3 border-t border-[#E2E8F0] space-y-2"
-                >
-                  <div className="text-xs font-semibold text-[#0F172A]">
-                    Issue Credit / Debit Note
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <select
-                      value={adjType}
-                      onChange={(e) =>
-                        setAdjType(e.target.value as "CREDIT" | "DEBIT")
-                      }
-                      className="border border-[#CBD5E1] rounded px-2 py-1 text-xs bg-white"
-                    >
-                      <option value="CREDIT">Credit Note (-)</option>
-                      <option value="DEBIT">Debit Note (+)</option>
-                    </select>
-                    <input
-                      type="number"
-                      step="0.01"
-                      required
-                      placeholder="Amount (KES)"
-                      value={adjAmount}
-                      onChange={(e) => setAdjAmount(e.target.value)}
-                      className="border border-[#CBD5E1] rounded px-2 py-1 text-xs font-mono tabular-nums"
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Reason (e.g. Plumbing repair offset)"
-                    value={adjReason}
-                    onChange={(e) => setAdjReason(e.target.value)}
-                    className="w-full border border-[#CBD5E1] rounded px-2 py-1 text-xs"
-                  />
-                  <button
-                    type="submit"
-                    className="w-full py-1.5 text-xs font-medium bg-[#0F5338] hover:bg-[#0B3F2A] text-white rounded"
+            {canApprove && selected.status !== "VOID" && (
+              <form
+                onSubmit={handleAdjustment}
+                className="pt-4 border-t border-[#E2E8F0] space-y-3"
+              >
+                <div className="font-semibold text-[#0F172A]">
+                  Issue Credit / Debit Note
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={adjType}
+                    onChange={(e) => setAdjType(e.target.value as "CREDIT" | "DEBIT")}
+                    className="border border-[#CBD5E1] rounded px-2.5 py-1.5 bg-white"
                   >
-                    Apply Adjustment
-                  </button>
-                </form>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+                    <option value="CREDIT">CREDIT (Reduce)</option>
+                    <option value="DEBIT">DEBIT (Add)</option>
+                  </select>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    placeholder="Amount"
+                    value={adjAmount}
+                    onChange={(e) => setAdjAmount(e.target.value)}
+                    className="border border-[#CBD5E1] rounded px-2.5 py-1.5 font-mono bg-white"
+                  />
+                </div>
+                <input
+                  type="text"
+                  required
+                  placeholder="Reason (e.g. Repair rebate)"
+                  value={adjReason}
+                  onChange={(e) => setAdjReason(e.target.value)}
+                  className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 bg-white"
+                />
+                <button
+                  type="submit"
+                  className="w-full py-2 bg-[#0F5338] hover:bg-[#0B3F2A] text-white font-medium rounded"
+                >
+                  Apply Adjustment
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+      </SlideOver>
     </div>
   );
 }

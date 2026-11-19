@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { SlideOver } from "@/components/SlideOver";
 import {
   apiFetch,
   type MaintenanceRequestItem,
@@ -10,47 +12,78 @@ import {
   type UnitItem,
 } from "@/lib/api";
 
-const STATUSES: MaintenanceRequestItem["status"][] = [
-  "OPEN",
-  "IN_PROGRESS",
-  "RESOLVED",
-  "CLOSED",
-];
-
 function MaintenanceContent({ orgId }: { orgId: string | null }) {
   const [requests, setRequests] = useState<MaintenanceRequestItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState("");
+  const [ordering, setOrdering] = useState("-created_at");
+
   const [properties, setProperties] = useState<PropertyItem[]>([]);
   const [units, setUnits] = useState<UnitItem[]>([]);
+  const [selected, setSelected] = useState<MaintenanceRequestItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const [propertyId, setPropertyId] = useState("");
   const [unitId, setUnitId] = useState("");
   const [title, setTitle] = useState("");
-  const [priority, setPriority] = useState<MaintenanceRequestItem["priority"]>("MEDIUM");
+  const [priority, setPriority] =
+    useState<MaintenanceRequestItem["priority"]>("MEDIUM");
 
-  const loadAll = async () => {
-    const [reqRes, propRes, unitRes] = await Promise.all([
-      apiFetch<PaginatedResponse<MaintenanceRequestItem>>("/maintenance-requests/?page_size=200"),
-      apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
-      apiFetch<PaginatedResponse<UnitItem>>("/units/?page_size=200"),
-    ]);
-    return {
-      requests: reqRes.results,
-      properties: propRes.results,
-      units: unitRes.results,
-    };
-  };
+  const buildQuery = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    if (search.trim()) params.set("search", search.trim());
+    if (statusFilter) params.set("status", statusFilter);
+    if (priorityFilter) params.set("priority", priorityFilter);
+    if (ordering) params.set("ordering", ordering);
+    return `?${params.toString()}`;
+  }, [page, search, statusFilter, priorityFilter, ordering]);
+
+  const reloadAll = useCallback(
+    async (selectId?: string) => {
+      const [reqRes, propRes, unitRes] = await Promise.all([
+        apiFetch<PaginatedResponse<MaintenanceRequestItem>>(
+          `/maintenance-requests/${buildQuery()}`
+        ),
+        apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
+        apiFetch<PaginatedResponse<UnitItem>>("/units/?page_size=200"),
+      ]);
+      setRequests(reqRes.results);
+      setTotalCount(reqRes.count);
+      setProperties(propRes.results);
+      setUnits(unitRes.results);
+      if (selectId) {
+        const updated =
+          reqRes.results.find((r) => r.id === selectId) ||
+          (await apiFetch<MaintenanceRequestItem>(
+            `/maintenance-requests/${selectId}/`
+          ));
+        setSelected(updated);
+      }
+    },
+    [buildQuery]
+  );
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
-    loadAll()
-      .then((res) => {
+    Promise.all([
+      apiFetch<PaginatedResponse<MaintenanceRequestItem>>(
+        `/maintenance-requests/${buildQuery()}`
+      ),
+      apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
+      apiFetch<PaginatedResponse<UnitItem>>("/units/?page_size=200"),
+    ])
+      .then(([reqRes, propRes, unitRes]) => {
         if (cancelled) return;
-        setRequests(res.requests);
-        setProperties(res.properties);
-        setUnits(res.units);
+        setRequests(reqRes.results);
+        setTotalCount(reqRes.count);
+        setProperties(propRes.results);
+        setUnits(unitRes.results);
         setError("");
       })
       .catch((err) => {
@@ -64,7 +97,7 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [orgId]);
+  }, [orgId, buildQuery]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,27 +114,25 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
       });
       setTitle("");
       setUnitId("");
-      const res = await loadAll();
-      setRequests(res.requests);
+      await reloadAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create request");
     }
   };
 
-  const handleStatusChange = async (
+  const handlePatch = async (
     id: string,
-    newStatus: MaintenanceRequestItem["status"]
+    payload: Partial<Pick<MaintenanceRequestItem, "status" | "priority">>
   ) => {
     setError("");
     try {
       await apiFetch(`/maintenance-requests/${id}/`, {
         method: "PATCH",
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(payload),
       });
-      const res = await loadAll();
-      setRequests(res.requests);
+      await reloadAll(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update status");
+      setError(err instanceof Error ? err.message : "Could not update ticket");
     }
   };
 
@@ -110,6 +141,74 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
   }
 
   const filteredUnits = units.filter((u) => !propertyId || u.property === propertyId);
+
+  const columns: DataTableColumn<MaintenanceRequestItem>[] = [
+    {
+      key: "location",
+      header: "Property / Unit",
+      render: (r) => (
+        <span className="font-mono text-xs text-[#0F172A]">
+          {r.property_name}
+          {r.unit_code ? ` · ${r.unit_code}` : ""}
+        </span>
+      ),
+      csvValue: (r) =>
+        `${r.property_name}${r.unit_code ? ` - ${r.unit_code}` : ""}`,
+    },
+    {
+      key: "title",
+      header: "Issue",
+      render: (r) => <span className="font-medium text-[#0F172A]">{r.title}</span>,
+      csvValue: (r) => r.title,
+    },
+    {
+      key: "priority",
+      header: "Priority",
+      sortField: "priority",
+      render: (r) => (
+        <span
+          className={`px-2 py-0.5 text-xs font-mono rounded border ${
+            r.priority === "URGENT" || r.priority === "HIGH"
+              ? "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]"
+              : "bg-[#F8FAFC] text-[#475569] border-[#CBD5E1]"
+          }`}
+        >
+          {r.priority}
+        </span>
+      ),
+      csvValue: (r) => r.priority,
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortField: "status",
+      render: (r) => (
+        <span
+          className={`px-2 py-0.5 text-xs font-medium rounded border ${
+            r.status === "RESOLVED" || r.status === "CLOSED"
+              ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
+              : r.status === "IN_PROGRESS"
+              ? "bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]"
+              : "bg-[#F8FAFC] text-[#0F172A] border-[#CBD5E1]"
+          }`}
+        >
+          {r.status}
+        </span>
+      ),
+      csvValue: (r) => r.status,
+    },
+    {
+      key: "created_at",
+      header: "Logged",
+      sortField: "created_at",
+      render: (r) => (
+        <span className="font-mono text-xs text-[#64748B] tabular-nums">
+          {new Date(r.created_at).toLocaleDateString("en-KE")}
+        </span>
+      ),
+      csvValue: (r) => r.created_at,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -127,7 +226,9 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
         className="bg-white border border-[#E2E8F0] rounded-md p-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-end"
       >
         <div>
-          <label className="block text-xs font-medium text-[#475569] mb-1">Property</label>
+          <label className="block text-xs font-medium text-[#475569] mb-1">
+            Property
+          </label>
           <select
             required
             value={propertyId}
@@ -188,9 +289,9 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
           </select>
           <button
             type="submit"
-            className="px-3.5 py-1.5 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-xs font-medium rounded shrink-0"
+            className="flex-1 py-1.5 px-3 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-sm font-medium rounded"
           >
-            Log Issue
+            Log
           </button>
         </div>
       </form>
@@ -201,62 +302,135 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
         </div>
       )}
 
-      <div className="bg-white border border-[#E2E8F0] rounded-md overflow-hidden">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead>
-            <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-medium text-[#475569]">
-              <th className="py-2.5 px-4">Issue</th>
-              <th className="py-2.5 px-4">Property / Unit</th>
-              <th className="py-2.5 px-4">Priority</th>
-              <th className="py-2.5 px-4">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#E2E8F0]">
-            {loading ? (
-              <tr>
-                <td colSpan={4} className="py-6 px-4 text-center text-[#64748B]">
-                  Loading requests...
-                </td>
-              </tr>
-            ) : requests.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-8 px-4 text-center text-[#64748B]">
-                  No maintenance requests logged.
-                </td>
-              </tr>
-            ) : (
-              requests.map((r) => (
-                <tr key={r.id} className="hover:bg-[#F8FAFC]">
-                  <td className="py-2.5 px-4 font-medium text-[#0F172A]">{r.title}</td>
-                  <td className="py-2.5 px-4 text-[#475569]">
-                    {r.property_name}
-                    {r.unit_code ? ` • ${r.unit_code}` : ""}
-                  </td>
-                  <td className="py-2.5 px-4 font-mono text-xs">{r.priority}</td>
-                  <td className="py-2.5 px-4">
-                    <select
-                      value={r.status}
-                      onChange={(e) =>
-                        handleStatusChange(
-                          r.id,
-                          e.target.value as MaintenanceRequestItem["status"]
-                        )
-                      }
-                      className="border border-[#CBD5E1] rounded px-2 py-1 text-xs bg-white"
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={requests}
+        rowKey={(r) => r.id}
+        totalCount={totalCount}
+        page={page}
+        onPageChange={(next) => setPage(next)}
+        searchPlaceholder="Search issue, property, unit..."
+        onSearchChange={(val) => {
+          setPage(1);
+          setSearch(val);
+        }}
+        ordering={ordering}
+        onOrderingChange={(next) => {
+          setPage(1);
+          setOrdering(next);
+        }}
+        filters={
+          <>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setPage(1);
+                setStatusFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Statuses</option>
+              <option value="OPEN">Open</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="RESOLVED">Resolved</option>
+              <option value="CLOSED">Closed</option>
+            </select>
+            <select
+              value={priorityFilter}
+              onChange={(e) => {
+                setPage(1);
+                setPriorityFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Priorities</option>
+              <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+              <option value="URGENT">Urgent</option>
+            </select>
+          </>
+        }
+        csvFilename="maintenance.csv"
+        loading={loading}
+        emptyMessage="No maintenance requests match your filters."
+        onRowClick={(r) => setSelected(r)}
+        selectedRowKey={selected?.id || null}
+      />
+
+      <SlideOver
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+        title={selected?.title || "Maintenance Ticket"}
+        subtitle={
+          selected
+            ? `${selected.property_name}${
+                selected.unit_code ? ` · Unit ${selected.unit_code}` : " · Common Area"
+              }`
+            : ""
+        }
+      >
+        {selected && (
+          <div className="space-y-4 text-xs">
+            <div className="border border-[#E2E8F0] rounded p-3 space-y-1.5">
+              <div>
+                <span className="text-[#64748B]">Reported by:</span>{" "}
+                <span>{selected.created_by_email || "—"}</span>
+              </div>
+              <div>
+                <span className="text-[#64748B]">Logged on:</span>{" "}
+                <span className="font-mono tabular-nums">
+                  {new Date(selected.created_at).toLocaleString("en-KE")}
+                </span>
+              </div>
+              {selected.description && (
+                <div className="pt-1 text-[#0F172A]">{selected.description}</div>
+              )}
+            </div>
+
+            <div className="border border-[#E2E8F0] rounded p-3 space-y-3">
+              <div>
+                <label className="block text-[#475569] font-medium mb-1">
+                  Update Status
+                </label>
+                <select
+                  value={selected.status}
+                  onChange={(e) =>
+                    handlePatch(selected.id, {
+                      status: e.target.value as MaintenanceRequestItem["status"],
+                    })
+                  }
+                  className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 bg-white"
+                >
+                  <option value="OPEN">OPEN</option>
+                  <option value="IN_PROGRESS">IN_PROGRESS</option>
+                  <option value="RESOLVED">RESOLVED</option>
+                  <option value="CLOSED">CLOSED</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[#475569] font-medium mb-1">
+                  Update Priority
+                </label>
+                <select
+                  value={selected.priority}
+                  onChange={(e) =>
+                    handlePatch(selected.id, {
+                      priority: e.target.value as MaintenanceRequestItem["priority"],
+                    })
+                  }
+                  className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 bg-white"
+                >
+                  <option value="LOW">LOW</option>
+                  <option value="MEDIUM">MEDIUM</option>
+                  <option value="HIGH">HIGH</option>
+                  <option value="URGENT">URGENT</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+      </SlideOver>
     </div>
   );
 }

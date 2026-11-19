@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { DataTable, type DataTableColumn } from "@/components/DataTable";
+import { SlideOver } from "@/components/SlideOver";
 import {
   apiFetch,
   formatKES,
   type LeaseItem,
   type PaginatedResponse,
+  type PropertyItem,
   type TenantItem,
   type UnitItem,
 } from "@/lib/api";
@@ -19,6 +22,14 @@ function LeasesContent({
   role: string | null;
 }) {
   const [leases, setLeases] = useState<LeaseItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [propertyFilter, setPropertyFilter] = useState("");
+  const [ordering, setOrdering] = useState("-start_date");
+
+  const [properties, setProperties] = useState<PropertyItem[]>([]);
   const [vacantUnits, setVacantUnits] = useState<UnitItem[]>([]);
   const [tenants, setTenants] = useState<TenantItem[]>([]);
   const [selectedLease, setSelectedLease] = useState<LeaseItem | null>(null);
@@ -35,7 +46,7 @@ function LeasesContent({
   const [billingDay, setBillingDay] = useState("5");
   const [submitting, setSubmitting] = useState(false);
 
-  // Deposit drawer form state
+  // Deposit & amend drawer state
   const [txType, setTxType] = useState<"RECEIVED" | "DEDUCTED" | "REFUNDED">("RECEIVED");
   const [txAmount, setTxAmount] = useState("");
   const [txRef, setTxRef] = useState("");
@@ -44,28 +55,55 @@ function LeasesContent({
   const canWrite = role === "OWNER" || role === "MANAGER" || role === "ACCOUNTANT";
   const canApprove = role === "OWNER" || role === "MANAGER";
 
-  const loadAll = async () => {
-    const [leaseRes, unitRes, tenantRes] = await Promise.all([
-      apiFetch<PaginatedResponse<LeaseItem>>("/leases/?page_size=200"),
-      apiFetch<PaginatedResponse<UnitItem>>("/units/?status=VACANT&page_size=200"),
-      apiFetch<PaginatedResponse<TenantItem>>("/tenants/?page_size=200"),
-    ]);
-    return {
-      leases: leaseRes.results,
-      units: unitRes.results,
-      tenants: tenantRes.results,
-    };
-  };
+  const buildQuery = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    if (search.trim()) params.set("search", search.trim());
+    if (statusFilter) params.set("status", statusFilter);
+    if (propertyFilter) params.set("unit__property", propertyFilter);
+    if (ordering) params.set("ordering", ordering);
+    return `?${params.toString()}`;
+  }, [page, search, statusFilter, propertyFilter, ordering]);
+
+  const reloadAll = useCallback(
+    async (selectId?: string) => {
+      const [leaseRes, unitRes, tenantRes, propRes] = await Promise.all([
+        apiFetch<PaginatedResponse<LeaseItem>>(`/leases/${buildQuery()}`),
+        apiFetch<PaginatedResponse<UnitItem>>("/units/?status=VACANT&page_size=200"),
+        apiFetch<PaginatedResponse<TenantItem>>("/tenants/?page_size=200"),
+        apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
+      ]);
+      setLeases(leaseRes.results);
+      setTotalCount(leaseRes.count);
+      setVacantUnits(unitRes.results);
+      setTenants(tenantRes.results);
+      setProperties(propRes.results);
+      if (selectId) {
+        const updated =
+          leaseRes.results.find((l) => l.id === selectId) ||
+          (await apiFetch<LeaseItem>(`/leases/${selectId}/`));
+        setSelectedLease(updated);
+      }
+    },
+    [buildQuery]
+  );
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
-    loadAll()
-      .then((res) => {
+    Promise.all([
+      apiFetch<PaginatedResponse<LeaseItem>>(`/leases/${buildQuery()}`),
+      apiFetch<PaginatedResponse<UnitItem>>("/units/?status=VACANT&page_size=200"),
+      apiFetch<PaginatedResponse<TenantItem>>("/tenants/?page_size=200"),
+      apiFetch<PaginatedResponse<PropertyItem>>("/properties/?page_size=200"),
+    ])
+      .then(([leaseRes, unitRes, tenantRes, propRes]) => {
         if (cancelled) return;
-        setLeases(res.leases);
-        setVacantUnits(res.units);
-        setTenants(res.tenants);
+        setLeases(leaseRes.results);
+        setTotalCount(leaseRes.count);
+        setVacantUnits(unitRes.results);
+        setTenants(tenantRes.results);
+        setProperties(propRes.results);
         setError("");
       })
       .catch((err) => {
@@ -79,7 +117,7 @@ function LeasesContent({
     return () => {
       cancelled = true;
     };
-  }, [orgId]);
+  }, [orgId, buildQuery]);
 
   const handleUnitSelect = (id: string) => {
     setUnitId(id);
@@ -87,17 +125,6 @@ function LeasesContent({
     if (u) {
       setRentAmount(u.advertised_rent);
       setRequiredDeposit(u.advertised_rent);
-    }
-  };
-
-  const refreshAndSelect = async (leaseId?: string) => {
-    const res = await loadAll();
-    setLeases(res.leases);
-    setVacantUnits(res.units);
-    setTenants(res.tenants);
-    if (leaseId) {
-      const updated = res.leases.find((l) => l.id === leaseId) || null;
-      setSelectedLease(updated);
     }
   };
 
@@ -120,7 +147,7 @@ function LeasesContent({
       setShowForm(false);
       setUnitId("");
       setTenantId("");
-      await refreshAndSelect(created.id);
+      await reloadAll(created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create lease");
     } finally {
@@ -143,7 +170,7 @@ function LeasesContent({
       });
       setTxAmount("");
       setTxRef("");
-      await refreshAndSelect(selectedLease.id);
+      await reloadAll(selectedLease.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit transaction failed");
     }
@@ -159,7 +186,7 @@ function LeasesContent({
         body: JSON.stringify({ rent_amount: newRent, reason: "Rent adjustment" }),
       });
       setNewRent("");
-      await refreshAndSelect(selectedLease.id);
+      await reloadAll(selectedLease.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not amend rent");
     }
@@ -174,7 +201,7 @@ function LeasesContent({
         method: "POST",
         body: JSON.stringify({ end_date: today, reason: "Lease terminated" }),
       });
-      await refreshAndSelect(selectedLease.id);
+      await reloadAll(selectedLease.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not terminate lease");
     }
@@ -183,6 +210,79 @@ function LeasesContent({
   if (!orgId) {
     return <div className="text-sm text-[#475569]">Select or create an organization.</div>;
   }
+
+  const columns: DataTableColumn<LeaseItem>[] = [
+    {
+      key: "unit",
+      header: "Property / Unit",
+      render: (l) => (
+        <div>
+          <div className="font-mono font-medium text-[#0F172A]">{l.unit_code}</div>
+          <div className="text-xs text-[#64748B]">{l.property_name}</div>
+        </div>
+      ),
+      csvValue: (l) => `${l.property_name} - ${l.unit_code}`,
+    },
+    {
+      key: "tenant",
+      header: "Primary Tenant",
+      render: (l) => (
+        <span className="text-[#0F172A]">
+          {l.occupants.map((o) => o.tenant_name).join(", ") || "—"}
+        </span>
+      ),
+      csvValue: (l) => l.occupants.map((o) => o.tenant_name).join("; "),
+    },
+    {
+      key: "start_date",
+      header: "Start Date",
+      sortField: "start_date",
+      render: (l) => (
+        <span className="font-mono text-xs text-[#64748B] tabular-nums">
+          {l.start_date}
+        </span>
+      ),
+      csvValue: (l) => l.start_date,
+    },
+    {
+      key: "rent",
+      header: "Monthly Rent",
+      align: "right",
+      sortField: "rent_amount",
+      render: (l) => (
+        <span className="font-mono tabular-nums">{formatKES(l.rent_amount)}</span>
+      ),
+      csvValue: (l) => l.rent_amount,
+    },
+    {
+      key: "deposit",
+      header: "Deposit Held",
+      align: "right",
+      render: (l) => (
+        <span className="font-mono tabular-nums text-[#475569]">
+          {formatKES(l.deposit_account?.held_balance || "0.00")}
+        </span>
+      ),
+      csvValue: (l) => l.deposit_account?.held_balance || "0.00",
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortField: "status",
+      render: (l) => (
+        <span
+          className={`px-2 py-0.5 text-xs font-medium rounded border ${
+            l.status === "ACTIVE"
+              ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
+              : "bg-[#F1F5F9] text-[#475569] border-[#CBD5E1]"
+          }`}
+        >
+          {l.status}
+        </span>
+      ),
+      csvValue: (l) => l.status,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -209,7 +309,7 @@ function LeasesContent({
           onSubmit={handleCreateLease}
           className="bg-white border border-[#E2E8F0] rounded-md p-4 grid grid-cols-1 md:grid-cols-6 gap-3 items-end"
         >
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-xs font-medium text-[#475569] mb-1">
               Vacant Unit
             </label>
@@ -217,17 +317,17 @@ function LeasesContent({
               required
               value={unitId}
               onChange={(e) => handleUnitSelect(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm bg-white"
             >
-              <option value="">Select vacant unit...</option>
+              <option value="">Select unit...</option>
               {vacantUnits.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.property_name} — {u.unit_code} ({formatKES(u.advertised_rent)})
+                  {u.property_name} · {u.unit_code}
                 </option>
               ))}
             </select>
           </div>
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-xs font-medium text-[#475569] mb-1">
               Primary Tenant
             </label>
@@ -235,12 +335,12 @@ function LeasesContent({
               required
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm bg-white"
             >
               <option value="">Select tenant...</option>
               {tenants.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.full_name} ({t.phone})
+                  {t.full_name}
                 </option>
               ))}
             </select>
@@ -254,26 +354,12 @@ function LeasesContent({
               required
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm font-mono bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono bg-white"
             />
           </div>
           <div>
             <label className="block text-xs font-medium text-[#475569] mb-1">
-              Due Day (1–28)
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={28}
-              required
-              value={billingDay}
-              onChange={(e) => setBillingDay(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm font-mono tabular-nums bg-white"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-xs font-medium text-[#475569] mb-1">
-              Monthly Rent (KES)
+              Monthly Rent
             </label>
             <input
               type="number"
@@ -281,28 +367,37 @@ function LeasesContent({
               required
               value={rentAmount}
               onChange={(e) => setRentAmount(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm font-mono tabular-nums bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono bg-white"
             />
           </div>
-          <div className="md:col-span-2">
+          <div>
             <label className="block text-xs font-medium text-[#475569] mb-1">
-              Required Deposit (KES)
+              Req. Deposit
             </label>
             <input
               type="number"
               step="0.01"
               value={requiredDeposit}
               onChange={(e) => setRequiredDeposit(e.target.value)}
-              className="w-full border border-[#CBD5E1] rounded px-3 py-1.5 text-sm font-mono tabular-nums bg-white"
+              className="w-full border border-[#CBD5E1] rounded px-2.5 py-1.5 text-sm font-mono bg-white"
             />
           </div>
-          <div className="md:col-span-2">
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min={1}
+              max={28}
+              value={billingDay}
+              onChange={(e) => setBillingDay(e.target.value)}
+              title="Billing day"
+              className="w-16 border border-[#CBD5E1] rounded px-2 py-1.5 text-sm font-mono bg-white"
+            />
             <button
               type="submit"
               disabled={submitting}
-              className="w-full py-1.5 px-4 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-sm font-medium rounded disabled:opacity-50"
+              className="flex-1 py-1.5 px-3 bg-[#0F5338] hover:bg-[#0B3F2A] text-white text-sm font-medium rounded disabled:opacity-50"
             >
-              {submitting ? "Creating..." : "Create Active Lease"}
+              {submitting ? "..." : "Create"}
             </button>
           </div>
         </form>
@@ -314,200 +409,187 @@ function LeasesContent({
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-        <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-md overflow-hidden">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-xs font-medium text-[#475569]">
-                <th className="py-2.5 px-4">Unit</th>
-                <th className="py-2.5 px-4">Tenant</th>
-                <th className="py-2.5 px-4 text-right">Monthly Rent</th>
-                <th className="py-2.5 px-4 text-right">Deposit Held</th>
-                <th className="py-2.5 px-4">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#E2E8F0]">
-              {loading ? (
-                <tr>
-                  <td colSpan={5} className="py-6 px-4 text-center text-[#64748B]">
-                    Loading leases...
-                  </td>
-                </tr>
-              ) : leases.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-8 px-4 text-center text-[#64748B]">
-                    No leases created yet.
-                  </td>
-                </tr>
-              ) : (
-                leases.map((l) => (
-                  <tr
-                    key={l.id}
-                    onClick={() => setSelectedLease(l)}
-                    className={`cursor-pointer hover:bg-[#F8FAFC] ${
-                      selectedLease?.id === l.id ? "bg-[#F1F5F9]" : ""
-                    }`}
-                  >
-                    <td className="py-2.5 px-4">
-                      <div className="font-mono font-medium text-[#0F172A]">
-                        {l.unit_code}
-                      </div>
-                      <div className="text-xs text-[#64748B]">{l.property_name}</div>
-                    </td>
-                    <td className="py-2.5 px-4 text-[#0F172A]">
-                      {l.occupants[0]?.tenant_name || "—"}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums">
-                      {formatKES(l.rent_amount)}
-                    </td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-[#475569]">
-                      {l.deposit_account
-                        ? formatKES(l.deposit_account.held_balance)
-                        : "—"}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span
-                        className={`px-2 py-0.5 text-xs font-medium rounded border ${
-                          l.status === "ACTIVE"
-                            ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
-                            : "bg-[#F1F5F9] text-[#475569] border-[#CBD5E1]"
-                        }`}
-                      >
-                        {l.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+      <DataTable
+        columns={columns}
+        rows={leases}
+        rowKey={(l) => l.id}
+        totalCount={totalCount}
+        page={page}
+        onPageChange={(next) => setPage(next)}
+        searchPlaceholder="Search unit, property, tenant..."
+        onSearchChange={(val) => {
+          setPage(1);
+          setSearch(val);
+        }}
+        ordering={ordering}
+        onOrderingChange={(next) => {
+          setPage(1);
+          setOrdering(next);
+        }}
+        filters={
+          <>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setPage(1);
+                setStatusFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Statuses</option>
+              <option value="ACTIVE">Active</option>
+              <option value="TERMINATED">Terminated</option>
+              <option value="EXPIRED">Expired</option>
+            </select>
+            <select
+              value={propertyFilter}
+              onChange={(e) => {
+                setPage(1);
+                setPropertyFilter(e.target.value);
+              }}
+              className="border border-[#CBD5E1] rounded px-2.5 py-1.5 text-xs bg-white"
+            >
+              <option value="">All Properties</option>
+              {properties.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </>
+        }
+        csvFilename="leases.csv"
+        loading={loading}
+        emptyMessage="No leases match your filters."
+        onRowClick={(l) => setSelectedLease(l)}
+        selectedRowKey={selectedLease?.id || null}
+      />
 
-        {/* Right-hand Lease & Deposit Inspector */}
-        <div className="bg-white border border-[#E2E8F0] rounded-md p-4 space-y-4">
-          {!selectedLease ? (
-            <div className="text-xs text-[#64748B]">
-              Select a lease row to inspect deposit ledger, amend rent, or view lease
-              events.
+      <SlideOver
+        open={Boolean(selectedLease)}
+        onClose={() => setSelectedLease(null)}
+        title={
+          selectedLease
+            ? `${selectedLease.property_name} · Unit ${selectedLease.unit_code}`
+            : "Lease Detail"
+        }
+        subtitle={
+          selectedLease
+            ? `${selectedLease.occupants.map((o) => o.tenant_name).join(", ")} · ${
+                selectedLease.status
+              }`
+            : ""
+        }
+      >
+        {selectedLease && (
+          <div className="space-y-5 text-xs">
+            <div className="border border-[#E2E8F0] rounded p-3 flex justify-between items-center bg-[#F8FAFC]">
+              <div>
+                <div className="text-[#64748B]">Deposit Held / Required</div>
+                <div className="mt-1 font-mono tabular-nums text-sm font-semibold">
+                  {formatKES(selectedLease.deposit_account?.held_balance || "0.00")} /{" "}
+                  {formatKES(selectedLease.deposit_account?.required_amount || "0.00")}
+                </div>
+              </div>
+              <span className="px-2 py-0.5 font-mono rounded border bg-white border-[#CBD5E1]">
+                {selectedLease.deposit_account?.status || "PENDING"}
+              </span>
             </div>
-          ) : (
-            <>
-              <div className="flex items-start justify-between border-b border-[#E2E8F0] pb-3">
-                <div>
-                  <div className="text-xs font-mono text-[#64748B]">
-                    {selectedLease.property_name} • {selectedLease.unit_code}
-                  </div>
-                  <div className="text-base font-semibold text-[#0F172A]">
-                    {selectedLease.occupants[0]?.tenant_name || "Lease"}
-                  </div>
+
+            {canWrite && (
+              <form
+                onSubmit={handleDepositTx}
+                className="space-y-2 border border-[#E2E8F0] rounded p-3"
+              >
+                <div className="font-medium text-[#0F172A]">
+                  Record Deposit Transaction
                 </div>
-                {canApprove && selectedLease.status === "ACTIVE" && (
-                  <button
-                    type="button"
-                    onClick={handleTerminate}
-                    className="px-2.5 py-1 text-xs font-medium border border-[#FECACA] text-[#B91C1C] bg-[#FEF2F2] rounded"
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={txType}
+                    onChange={(e) =>
+                      setTxType(
+                        e.target.value as "RECEIVED" | "DEDUCTED" | "REFUNDED"
+                      )
+                    }
+                    className="border border-[#CBD5E1] rounded px-2 py-1.5 bg-white"
                   >
-                    Terminate
-                  </button>
-                )}
-              </div>
-
-              {/* Deposit Ledger */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs">
-                  <span className="font-semibold text-[#0F172A]">Deposit Ledger</span>
-                  <span className="font-mono tabular-nums text-[#475569]">
-                    Held:{" "}
-                    {selectedLease.deposit_account
-                      ? formatKES(selectedLease.deposit_account.held_balance)
-                      : "KES 0.00"}{" "}
-                    /{" "}
-                    {selectedLease.deposit_account
-                      ? formatKES(selectedLease.deposit_account.required_amount)
-                      : "KES 0.00"}
-                  </span>
-                </div>
-
-                {canWrite && (
-                  <form onSubmit={handleDepositTx} className="grid grid-cols-3 gap-2">
-                    <select
-                      value={txType}
-                      onChange={(e) =>
-                        setTxType(
-                          e.target.value as "RECEIVED" | "DEDUCTED" | "REFUNDED"
-                        )
-                      }
-                      className="border border-[#CBD5E1] rounded px-2 py-1 text-xs bg-white"
-                    >
-                      <option value="RECEIVED">Received</option>
-                      {canApprove && <option value="DEDUCTED">Deducted</option>}
-                      {canApprove && <option value="REFUNDED">Refunded</option>}
-                    </select>
-                    <input
-                      type="number"
-                      step="0.01"
-                      required
-                      placeholder="Amount"
-                      value={txAmount}
-                      onChange={(e) => setTxAmount(e.target.value)}
-                      className="border border-[#CBD5E1] rounded px-2 py-1 text-xs font-mono tabular-nums"
-                    />
-                    <input
-                      type="text"
-                      placeholder="M-Pesa Ref"
-                      value={txRef}
-                      onChange={(e) => setTxRef(e.target.value)}
-                      className="border border-[#CBD5E1] rounded px-2 py-1 text-xs font-mono"
-                    />
-                    <button
-                      type="submit"
-                      className="col-span-3 py-1 text-xs font-medium bg-[#0F5338] hover:bg-[#0B3F2A] text-white rounded"
-                    >
-                      Record Deposit Entry
-                    </button>
-                  </form>
-                )}
-              </div>
-
-              {/* Amend Rent */}
-              {canApprove && selectedLease.status === "ACTIVE" && (
-                <form
-                  onSubmit={handleAmendRent}
-                  className="pt-2 border-t border-[#E2E8F0] flex gap-2"
-                >
+                    <option value="RECEIVED">RECEIVED</option>
+                    {canApprove && <option value="DEDUCTED">DEDUCTED</option>}
+                    {canApprove && <option value="REFUNDED">REFUNDED</option>}
+                  </select>
                   <input
                     type="number"
                     step="0.01"
-                    placeholder="New rent (KES)"
+                    required
+                    placeholder="Amount"
+                    value={txAmount}
+                    onChange={(e) => setTxAmount(e.target.value)}
+                    className="border border-[#CBD5E1] rounded px-2 py-1.5 font-mono bg-white"
+                  />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Reference (e.g. MPESA-DEP-01)"
+                  value={txRef}
+                  onChange={(e) => setTxRef(e.target.value)}
+                  className="w-full border border-[#CBD5E1] rounded px-2 py-1.5 font-mono bg-white"
+                />
+                <button
+                  type="submit"
+                  className="w-full py-1.5 bg-[#0F5338] hover:bg-[#0B3F2A] text-white font-medium rounded"
+                >
+                  Post Deposit Entry
+                </button>
+              </form>
+            )}
+
+            {canApprove && selectedLease.status === "ACTIVE" && (
+              <div className="space-y-3 border border-[#E2E8F0] rounded p-3">
+                <form onSubmit={handleAmendRent} className="flex gap-2">
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="New monthly rent"
                     value={newRent}
                     onChange={(e) => setNewRent(e.target.value)}
-                    className="flex-1 border border-[#CBD5E1] rounded px-2.5 py-1 text-xs font-mono tabular-nums"
+                    className="flex-1 border border-[#CBD5E1] rounded px-2 py-1.5 font-mono bg-white"
                   />
                   <button
                     type="submit"
-                    className="px-3 py-1 text-xs font-medium border border-[#CBD5E1] rounded hover:bg-[#F8FAFC]"
+                    className="px-3 py-1.5 border border-[#CBD5E1] bg-[#F8FAFC] hover:bg-[#F1F5F9] rounded font-medium"
                   >
                     Amend Rent
                   </button>
                 </form>
-              )}
+                <button
+                  type="button"
+                  onClick={handleTerminate}
+                  className="w-full py-1.5 border border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C] rounded font-medium"
+                >
+                  Terminate Lease &amp; Mark Unit Vacant
+                </button>
+              </div>
+            )}
 
-              {/* Event History */}
-              <div className="pt-2 border-t border-[#E2E8F0] space-y-1.5">
-                <div className="text-xs font-semibold text-[#0F172A]">Lease History</div>
+            <div>
+              <div className="font-medium text-[#0F172A] mb-2">
+                Immutable Lease Events ({selectedLease.events.length})
+              </div>
+              <div className="border border-[#E2E8F0] rounded divide-y divide-[#E2E8F0]">
                 {selectedLease.events.map((ev) => (
-                  <div key={ev.id} className="text-xs flex justify-between text-[#475569]">
+                  <div key={ev.id} className="p-2.5 flex justify-between">
                     <span className="font-mono text-[#0F172A]">{ev.event_type}</span>
-                    <span className="font-mono tabular-nums">
+                    <span className="text-[#64748B] tabular-nums">
                       {new Date(ev.occurred_at).toLocaleDateString("en-KE")}
                     </span>
                   </div>
                 ))}
               </div>
-            </>
-          )}
-        </div>
-      </div>
+            </div>
+          </div>
+        )}
+      </SlideOver>
     </div>
   );
 }

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -5,8 +7,10 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.audit.models import record_audit_event
+from apps.billing.models import AdjustmentType, Invoice, InvoiceAdjustment, InvoiceStatus
 from apps.core.tenancy import HasOrganizationMembership, TenantScopedMixin, require_org_roles
 from apps.organizations.models import OrganizationRole
+from apps.payments.models import Payment, PaymentReversal
 from apps.properties.models import UnitStatus
 
 from .models import (
@@ -42,12 +46,142 @@ class TenantViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     queryset = Tenant.objects.all()
     filterset_fields = ["status"]
     search_fields = ["full_name", "phone", "email"]
+    ordering_fields = ["full_name", "status", "created_at"]
+    ordering = ["full_name"]
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_permissions(self):
         if self.request.method in ("GET", "HEAD", "OPTIONS"):
             return [HasOrganizationMembership()]
         return [require_org_roles(*LEASING_WRITE_ROLES)()]
+
+    @action(detail=True, methods=["get"])
+    def ledger(self, request, pk=None):
+        """Return chronological running statement for a tenant within the active org."""
+        tenant = self.get_object()
+        org = tenant.organization
+
+        invoices = (
+            Invoice.objects.select_related("lease__unit")
+            .filter(
+                organization=org,
+                lease__occupants__tenant=tenant,
+            )
+            .exclude(status=InvoiceStatus.VOID)
+            .distinct()
+        )
+        adjustments = (
+            InvoiceAdjustment.objects.select_related("invoice__lease__unit")
+            .filter(
+                organization=org,
+                invoice__in=invoices,
+            )
+        )
+        payments = (
+            Payment.objects.select_related("lease__unit")
+            .filter(organization=org, lease__occupants__tenant=tenant)
+            | Payment.objects.select_related("lease__unit").filter(
+                organization=org, tenant=tenant
+            )
+        ).distinct()
+        reversals = PaymentReversal.objects.select_related("payment__lease__unit").filter(
+            organization=org,
+            payment__in=payments,
+        )
+
+        raw_entries = []
+        for inv in invoices:
+            raw_entries.append(
+                {
+                    "date": inv.issue_date.isoformat(),
+                    "created_at": inv.created_at,
+                    "entry_type": "INVOICE",
+                    "reference": inv.invoice_number,
+                    "unit_code": inv.lease.unit.unit_code,
+                    "description": f"Invoice ({inv.billing_period or 'Manual'})",
+                    "debit": inv.total_amount,
+                    "credit": Decimal("0.00"),
+                }
+            )
+        for adj in adjustments:
+            is_debit = adj.adjustment_type == AdjustmentType.DEBIT
+            raw_entries.append(
+                {
+                    "date": adj.created_at.date().isoformat(),
+                    "created_at": adj.created_at,
+                    "entry_type": f"ADJUSTMENT_{adj.adjustment_type}",
+                    "reference": adj.invoice.invoice_number,
+                    "unit_code": adj.invoice.lease.unit.unit_code,
+                    "description": adj.reason or f"Invoice {adj.adjustment_type.lower()}",
+                    "debit": adj.amount if is_debit else Decimal("0.00"),
+                    "credit": Decimal("0.00") if is_debit else adj.amount,
+                }
+            )
+        for p in payments:
+            raw_entries.append(
+                {
+                    "date": p.received_at.date().isoformat(),
+                    "created_at": p.received_at,
+                    "entry_type": "PAYMENT",
+                    "reference": p.receipt_number or p.payment_reference,
+                    "unit_code": p.lease.unit.unit_code if p.lease else "—",
+                    "description": f"{p.method} ({p.payment_reference})",
+                    "debit": Decimal("0.00"),
+                    "credit": p.amount,
+                }
+            )
+        for rev in reversals:
+            raw_entries.append(
+                {
+                    "date": rev.reversed_at.date().isoformat(),
+                    "created_at": rev.reversed_at,
+                    "entry_type": "PAYMENT_REVERSAL",
+                    "reference": rev.payment.receipt_number or rev.payment.payment_reference,
+                    "unit_code": rev.payment.lease.unit.unit_code if rev.payment.lease else "—",
+                    "description": f"Reversal: {rev.reason}",
+                    "debit": rev.amount,
+                    "credit": Decimal("0.00"),
+                }
+            )
+
+        raw_entries.sort(key=lambda e: (e["date"], e["created_at"]))
+
+        running = Decimal("0.00")
+        total_billed = Decimal("0.00")
+        total_paid = Decimal("0.00")
+        entries = []
+        for item in raw_entries:
+            debit = item["debit"]
+            credit = item["credit"]
+            total_billed += debit
+            total_paid += credit
+            running += debit - credit
+            entries.append(
+                {
+                    "date": item["date"],
+                    "entry_type": item["entry_type"],
+                    "reference": item["reference"],
+                    "unit_code": item["unit_code"],
+                    "description": item["description"],
+                    "debit": f"{debit:.2f}",
+                    "credit": f"{credit:.2f}",
+                    "running_balance": f"{running:.2f}",
+                }
+            )
+
+        return Response(
+            {
+                "tenant_id": str(tenant.id),
+                "full_name": tenant.full_name,
+                "phone": tenant.phone,
+                "email": tenant.email,
+                "currency": org.default_currency,
+                "total_billed": f"{total_billed:.2f}",
+                "total_paid": f"{total_paid:.2f}",
+                "current_balance": f"{running:.2f}",
+                "entries": entries,
+            }
+        )
 
 
 class LeaseViewSet(TenantScopedMixin, viewsets.ModelViewSet):
@@ -62,6 +196,8 @@ class LeaseViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     )
     filterset_fields = ["status", "unit", "unit__property"]
     search_fields = ["unit__unit_code", "unit__property__name", "occupants__tenant__full_name"]
+    ordering_fields = ["start_date", "end_date", "rent_amount", "status", "created_at"]
+    ordering = ["-start_date", "-created_at"]
     http_method_names = ["get", "post", "head", "options"]
 
     def get_permissions(self):
