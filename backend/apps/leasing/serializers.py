@@ -29,6 +29,7 @@ class TenantSerializer(serializers.ModelSerializer):
             "phone",
             "email",
             "national_id",
+            "kra_pin",
             "sms_opt_in",
             "email_opt_in",
             "status",

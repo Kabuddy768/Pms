@@ -27,12 +27,18 @@ class PropertySerializer(serializers.ModelSerializer):
             "county",
             "town",
             "status",
+            "management_fee_percent",
             "unit_count",
             "vacant_unit_count",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "unit_count", "vacant_unit_count", "created_at", "updated_at"]
+
+    def validate_management_fee_percent(self, value: Decimal) -> Decimal:
+        if value < Decimal("0.00") or value > Decimal("100.00"):
+            raise serializers.ValidationError("Management fee must be between 0 and 100.")
+        return value
 
 
 class BuildingSerializer(serializers.ModelSerializer):
@@ -149,7 +155,7 @@ class UnitSerializer(serializers.ModelSerializer):
 class OwnerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Owner
-        fields = ["id", "full_name", "phone", "email", "created_at", "updated_at"]
+        fields = ["id", "full_name", "phone", "email", "kra_pin", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
 

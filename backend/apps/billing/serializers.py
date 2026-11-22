@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from apps.audit.models import record_audit_event
 from apps.leasing.models import Lease
+from apps.properties.models import Unit
 
 from .models import (
     AdjustmentType,
@@ -14,6 +15,7 @@ from .models import (
     InvoiceLine,
     InvoiceStatus,
     SequenceType,
+    UtilityMeterReading,
     next_sequence_number,
 )
 
@@ -210,3 +212,111 @@ class InvoiceAdjustmentCreateSerializer(serializers.Serializer):
         if value <= Decimal("0.00"):
             raise serializers.ValidationError("Adjustment amount must be positive.")
         return value
+
+
+class UtilityMeterReadingSerializer(serializers.ModelSerializer):
+    unit_code = serializers.CharField(source="unit.unit_code", read_only=True)
+    property_name = serializers.CharField(source="unit.property.name", read_only=True)
+    units_consumed = serializers.SerializerMethodField()
+    billed_invoice_number = serializers.CharField(
+        source="billed_invoice.invoice_number", read_only=True, default=None
+    )
+    recorded_by_email = serializers.EmailField(
+        source="recorded_by.email", read_only=True, default=None
+    )
+
+    class Meta:
+        model = UtilityMeterReading
+        fields = [
+            "id",
+            "unit",
+            "unit_code",
+            "property_name",
+            "charge_type",
+            "billing_period",
+            "previous_reading",
+            "current_reading",
+            "units_consumed",
+            "unit_rate",
+            "total_amount",
+            "billed_invoice",
+            "billed_invoice_number",
+            "recorded_by_email",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "unit_code",
+            "property_name",
+            "units_consumed",
+            "total_amount",
+            "billed_invoice",
+            "billed_invoice_number",
+            "recorded_by_email",
+            "created_at",
+        ]
+
+    def get_units_consumed(self, obj: UtilityMeterReading) -> str:
+        return f"{(obj.current_reading - obj.previous_reading):.2f}"
+
+    def validate_billing_period(self, value: str) -> str:
+        import re
+
+        cleaned = value.strip()
+        if not re.match(r"^\d{4}-\d{2}$", cleaned):
+            raise serializers.ValidationError("Billing period must use YYYY-MM format.")
+        return cleaned
+
+    def validate_unit(self, value: Unit) -> Unit:
+        if value.organization_id != self.context["organization"].id:
+            raise serializers.ValidationError("Unit does not belong to your organization.")
+        return value
+
+    def validate(self, attrs):
+        if self.instance and self.instance.billed_invoice_id is not None:
+            raise serializers.ValidationError(
+                {"detail": "Cannot modify a meter reading that has already been billed."}
+            )
+        prev = attrs.get(
+            "previous_reading", getattr(self.instance, "previous_reading", None)
+        )
+        curr = attrs.get(
+            "current_reading", getattr(self.instance, "current_reading", None)
+        )
+        rate = attrs.get("unit_rate", getattr(self.instance, "unit_rate", None))
+        if prev is not None and prev < Decimal("0.00"):
+            raise serializers.ValidationError(
+                {"previous_reading": "Previous reading cannot be negative."}
+            )
+        if prev is not None and curr is not None and curr < prev:
+            raise serializers.ValidationError(
+                {"current_reading": "Current reading cannot be less than previous reading."}
+            )
+        if rate is not None and rate < Decimal("0.00"):
+            raise serializers.ValidationError({"unit_rate": "Unit rate cannot be negative."})
+
+        unit = attrs.get("unit", getattr(self.instance, "unit", None))
+        charge_type = attrs.get(
+            "charge_type", getattr(self.instance, "charge_type", None)
+        )
+        period = attrs.get(
+            "billing_period", getattr(self.instance, "billing_period", None)
+        )
+        org = self.context["organization"]
+        qs = UtilityMeterReading.objects.filter(
+            organization=org,
+            unit=unit,
+            charge_type=charge_type,
+            billing_period=period,
+        )
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+        if qs.exists():
+            raise serializers.ValidationError(
+                {
+                    "billing_period": (
+                        "A meter reading for this unit, charge type, and period already exists."
+                    )
+                }
+            )
+        return attrs

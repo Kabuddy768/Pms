@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -45,6 +45,19 @@ class CurrentOrganizationView(APIView):
         serializer = OrganizationSerializer(
             request.organization, context={"request": request}
         )
+        return Response(serializer.data)
+
+    def patch(self, request):
+        if request.membership.role not in (OrganizationRole.OWNER, OrganizationRole.MANAGER):
+            raise PermissionDenied("Only OWNER or MANAGER can update organization settings.")
+        serializer = OrganizationSerializer(
+            request.organization,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(serializer.data)
 
 

@@ -73,6 +73,26 @@ export interface PropertySummary {
   vacant_unit_count: number;
 }
 
+export interface UnitSummary {
+  id: string;
+  property_name: string;
+  unit_code: string;
+}
+
+export interface MeterReadingSummary {
+  id: string;
+  unit: string;
+  unit_code: string;
+  property_name: string;
+  charge_type: "WATER" | "GARBAGE" | "SERVICE_CHARGE";
+  billing_period: string;
+  previous_reading: string;
+  current_reading: string;
+  units_consumed: string;
+  total_amount: string;
+  billed_invoice_number: string | null;
+}
+
 const DEFAULT_BASE =
   Platform.OS === "android"
     ? "http://10.0.2.2:8000/api/v1"

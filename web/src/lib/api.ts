@@ -26,6 +26,7 @@ export interface OrganizationDetail {
   timezone: string;
   plan_tier: string;
   unit_limit: number;
+  kra_pin?: string;
   created_at: string;
   role: string | null;
 }
@@ -95,6 +96,7 @@ export interface PropertyItem {
   county: string;
   town: string;
   status: "ACTIVE" | "ARCHIVED";
+  management_fee_percent?: string;
   unit_count: number;
   vacant_unit_count: number;
   created_at: string;
@@ -124,6 +126,7 @@ export interface OwnerItem {
   full_name: string;
   phone: string;
   email: string;
+  kra_pin?: string;
 }
 
 export interface PropertyOwnerItem {
@@ -144,6 +147,7 @@ export interface TenantItem {
   phone: string;
   email: string;
   national_id: string;
+  kra_pin?: string;
   sms_opt_in: boolean;
   email_opt_in: boolean;
   status: "ACTIVE" | "ARCHIVED";
@@ -379,6 +383,71 @@ export interface CsvImportResponse {
   unmatched_suspense_count: number;
   duplicate_skipped_count: number;
   rows: CsvImportPreviewRow[];
+}
+
+export interface UtilityMeterReadingItem {
+  id: string;
+  unit: string;
+  unit_code: string;
+  property_name: string;
+  charge_type: "WATER" | "GARBAGE" | "SERVICE_CHARGE";
+  billing_period: string;
+  previous_reading: string;
+  current_reading: string;
+  units_consumed: string;
+  unit_rate: string;
+  total_amount: string;
+  billed_invoice: string | null;
+  billed_invoice_number: string | null;
+  recorded_by_email: string | null;
+  created_at: string;
+}
+
+export interface OwnerStatementOwnerSplit {
+  owner_id: string;
+  full_name: string;
+  kra_pin: string;
+  ownership_share: string;
+  payout_amount: string;
+}
+
+export interface OwnerStatementProperty {
+  property_id: string;
+  property_name: string;
+  property_type: string;
+  gross_collected: string;
+  management_fee_percent: string;
+  management_fee_amount: string;
+  approved_expenses: string;
+  net_remittance: string;
+  owners: OwnerStatementOwnerSplit[];
+}
+
+export interface OwnerStatementResponse {
+  billing_period: string;
+  currency: string;
+  organization_name: string;
+  organization_kra_pin: string;
+  statements: OwnerStatementProperty[];
+}
+
+export interface KraMriSummaryResponse {
+  billing_period: string;
+  currency: string;
+  organization_name: string;
+  organization_kra_pin: string;
+  mri_tax_rate: string;
+  gross_residential_collected: string;
+  gross_commercial_or_mixed_collected: string;
+  estimated_mri_tax: string;
+  properties: Array<{
+    property_id: string;
+    property_name: string;
+    property_type: string;
+    collected_amount: string;
+    mri_eligible: boolean;
+    estimated_mri_tax: string;
+  }>;
 }
 
 export function buildWhatsAppUrl(

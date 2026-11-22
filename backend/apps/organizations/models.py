@@ -15,6 +15,7 @@ class Organization(models.Model):
     timezone = models.CharField(max_length=64, default="Africa/Nairobi")
     plan_tier = models.CharField(max_length=32, default="STARTER")
     unit_limit = models.PositiveIntegerField(default=50)
+    kra_pin = models.CharField(max_length=20, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

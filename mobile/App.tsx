@@ -17,12 +17,14 @@ import {
   type InvoiceSummary,
   type LeaseSummary,
   type MaintenanceSummary,
+  type MeterReadingSummary,
   type PaymentSummary,
   type PropertySummary,
+  type UnitSummary,
   type UserProfile,
 } from "./src/api";
 
-type TabKey = "portfolio" | "payments" | "maintenance";
+type TabKey = "portfolio" | "payments" | "maintenance" | "meters";
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -62,6 +64,16 @@ export default function App() {
   const [maintPropId, setMaintPropId] = useState("");
   const [maintTitle, setMaintTitle] = useState("");
 
+  // Utility meter readings state
+  const [units, setUnits] = useState<UnitSummary[]>([]);
+  const [meterReadings, setMeterReadings] = useState<MeterReadingSummary[]>([]);
+  const [meterUnitId, setMeterUnitId] = useState("");
+  const [meterPeriod, setMeterPeriod] = useState("2026-11");
+  const [meterPrev, setMeterPrev] = useState("");
+  const [meterCurr, setMeterCurr] = useState("");
+  const [meterRate, setMeterRate] = useState("150.00");
+  const [meterFeedback, setMeterFeedback] = useState("");
+
   const handleLogin = async () => {
     setAuthLoading(true);
     setAuthError("");
@@ -87,43 +99,57 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [dash, propRes, leaseRes, invRes, payRes, maintRes] = await Promise.all([
-        mobileFetch<DashboardSummary>("/reports/dashboard/", {
-          token: activeToken,
-          orgId: activeOrgId,
-        }),
-        mobileFetch<{ results: PropertySummary[] }>("/properties/", {
-          token: activeToken,
-          orgId: activeOrgId,
-        }),
-        mobileFetch<{ results: LeaseSummary[] }>("/leases/?status=ACTIVE", {
-          token: activeToken,
-          orgId: activeOrgId,
-        }),
-        mobileFetch<{ results: InvoiceSummary[] }>("/invoices/", {
-          token: activeToken,
-          orgId: activeOrgId,
-        }),
-        mobileFetch<{ results: PaymentSummary[] }>("/payments/", {
-          token: activeToken,
-          orgId: activeOrgId,
-        }),
-        mobileFetch<{ results: MaintenanceSummary[] }>("/maintenance-requests/", {
-          token: activeToken,
-          orgId: activeOrgId,
-        }),
-      ]);
+      const [dash, propRes, leaseRes, invRes, payRes, maintRes, unitRes, meterRes] =
+        await Promise.all([
+          mobileFetch<DashboardSummary>("/reports/dashboard/", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: PropertySummary[] }>("/properties/", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: LeaseSummary[] }>("/leases/?status=ACTIVE", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: InvoiceSummary[] }>("/invoices/", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: PaymentSummary[] }>("/payments/", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: MaintenanceSummary[] }>("/maintenance-requests/", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: UnitSummary[] }>("/units/?page_size=200", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+          mobileFetch<{ results: MeterReadingSummary[] }>("/meter-readings/", {
+            token: activeToken,
+            orgId: activeOrgId,
+          }),
+        ]);
       setDashboard(dash);
       setProperties(propRes.results);
       setLeases(leaseRes.results);
       setInvoices(invRes.results);
       setPayments(payRes.results);
       setMaintenance(maintRes.results);
+      setUnits(unitRes.results);
+      setMeterReadings(meterRes.results);
       if (!payLeaseId && leaseRes.results.length > 0) {
         setPayLeaseId(leaseRes.results[0].id);
       }
       if (!maintPropId && propRes.results.length > 0) {
         setMaintPropId(propRes.results[0].id);
+      }
+      if (!meterUnitId && unitRes.results.length > 0) {
+        setMeterUnitId(unitRes.results[0].id);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load workspace");
@@ -207,6 +233,35 @@ export default function App() {
       await loadWorkspace(token, orgId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Status update failed");
+    }
+  };
+
+  const handleSubmitMeter = async () => {
+    if (!token || !orgId || !meterUnitId || !meterPrev.trim() || !meterCurr.trim()) return;
+    setError("");
+    setMeterFeedback("");
+    try {
+      const created = await mobileFetch<MeterReadingSummary>("/meter-readings/", {
+        method: "POST",
+        token,
+        orgId,
+        body: {
+          unit: meterUnitId,
+          charge_type: "WATER",
+          billing_period: meterPeriod.trim(),
+          previous_reading: meterPrev.trim(),
+          current_reading: meterCurr.trim(),
+          unit_rate: meterRate.trim() || "150.00",
+        },
+      });
+      setMeterPrev("");
+      setMeterCurr("");
+      setMeterFeedback(
+        `Saved ${created.unit_code} water charge: ${formatKES(created.total_amount)}`
+      );
+      await loadWorkspace(token, orgId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not record reading");
     }
   };
 
@@ -303,6 +358,7 @@ export default function App() {
             ["portfolio", "Portfolio"],
             ["payments", "Payments"],
             ["maintenance", "Maintenance"],
+            ["meters", "Meters"],
           ] as const
         ).map(([key, label]) => (
           <Pressable
@@ -533,6 +589,98 @@ export default function App() {
                 </View>
               ))
             )}
+          </>
+        )}
+
+        {tab === "meters" && (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Log Water Meter Reading</Text>
+              <Text style={styles.label}>Unit</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginBottom: 8 }}
+              >
+                {units.map((u) => (
+                  <Pressable
+                    key={u.id}
+                    onPress={() => setMeterUnitId(u.id)}
+                    style={[styles.orgPill, meterUnitId === u.id && styles.orgPillActive]}
+                  >
+                    <Text
+                      style={[
+                        styles.orgPillText,
+                        meterUnitId === u.id && styles.orgPillTextActive,
+                      ]}
+                    >
+                      {u.unit_code}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+
+              <Text style={styles.label}>Billing Period (YYYY-MM)</Text>
+              <TextInput
+                style={styles.input}
+                value={meterPeriod}
+                onChangeText={setMeterPeriod}
+              />
+
+              <Text style={styles.label}>Previous Reading</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="decimal-pad"
+                placeholder="100.00"
+                value={meterPrev}
+                onChangeText={setMeterPrev}
+              />
+
+              <Text style={styles.label}>Current Reading</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="decimal-pad"
+                placeholder="112.00"
+                value={meterCurr}
+                onChangeText={setMeterCurr}
+              />
+
+              <Text style={styles.label}>Rate per Unit (KES)</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="decimal-pad"
+                value={meterRate}
+                onChangeText={setMeterRate}
+              />
+
+              {meterFeedback ? <Text style={styles.successBox}>{meterFeedback}</Text> : null}
+
+              <Pressable style={styles.primaryBtn} onPress={handleSubmitMeter}>
+                <Text style={styles.primaryBtnText}>Save Meter Reading</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.sectionTitle}>
+              Meter Readings ({meterReadings.length})
+            </Text>
+            {meterReadings.map((m) => (
+              <View key={m.id} style={styles.listRow}>
+                <View>
+                  <Text style={styles.rowTitle}>
+                    {m.unit_code} • {m.charge_type} ({m.billing_period})
+                  </Text>
+                  <Text style={styles.rowMeta}>
+                    {m.previous_reading} → {m.current_reading} ({m.units_consumed} units)
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={styles.moneyValue}>{formatKES(m.total_amount)}</Text>
+                  <Text style={styles.rowMeta}>
+                    {m.billed_invoice_number || "PENDING"}
+                  </Text>
+                </View>
+              </View>
+            ))}
           </>
         )}
       </ScrollView>

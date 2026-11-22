@@ -22,6 +22,7 @@ from .models import (
     InvoiceLine,
     InvoiceStatus,
     SequenceType,
+    UtilityMeterReading,
     next_sequence_number,
 )
 from .serializers import (
@@ -29,6 +30,7 @@ from .serializers import (
     InvoiceAdjustmentCreateSerializer,
     InvoiceCreateSerializer,
     InvoiceSerializer,
+    UtilityMeterReadingSerializer,
 )
 
 BILLING_WRITE_ROLES = (
@@ -151,6 +153,39 @@ class InvoiceViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 line_total=lease.rent_amount,
             )
 
+            meter_readings = list(
+                UtilityMeterReading.objects.select_for_update()
+                .filter(
+                    organization=org,
+                    unit=lease.unit,
+                    billing_period=period,
+                    billed_invoice__isnull=True,
+                )
+                .order_by("charge_type")
+            )
+            extra_total = Decimal("0.00")
+            for reading in meter_readings:
+                consumed = reading.current_reading - reading.previous_reading
+                InvoiceLine.objects.create(
+                    organization=org,
+                    invoice=inv,
+                    charge_type=reading.charge_type,
+                    description=(
+                        f"{reading.charge_type} ({period}) · "
+                        f"{reading.previous_reading} -> {reading.current_reading}"
+                    ),
+                    quantity=consumed,
+                    unit_amount=reading.unit_rate,
+                    line_total=reading.total_amount,
+                )
+                reading.billed_invoice = inv
+                reading.save(update_fields=["billed_invoice", "updated_at"])
+                extra_total += reading.total_amount
+
+            if extra_total > Decimal("0.00"):
+                inv.total_amount += extra_total
+                inv.save(update_fields=["total_amount", "updated_at"])
+
             for p in Payment.objects.filter(
                 organization=org, lease=lease, status=PaymentStatus.CONFIRMED
             ).order_by("received_at"):
@@ -224,3 +259,39 @@ class InvoiceViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             },
         )
         return Response(InvoiceSerializer(invoice).data, status=status.HTTP_201_CREATED)
+
+
+class UtilityMeterReadingViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    """Per-unit metered utility readings (WATER/GARBAGE/SERVICE_CHARGE); CARETAKER writable."""
+
+    permission_classes = [HasOrganizationMembership]
+    serializer_class = UtilityMeterReadingSerializer
+    queryset = UtilityMeterReading.objects.select_related(
+        "unit", "unit__property", "billed_invoice", "recorded_by"
+    ).all()
+    filterset_fields = ["billing_period", "charge_type", "unit"]
+    search_fields = ["unit__unit_code", "unit__property__name"]
+    ordering_fields = ["billing_period", "total_amount", "created_at"]
+    http_method_names = ["get", "post", "patch", "head", "options"]
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["organization"] = self.get_organization()
+        return ctx
+
+    def perform_create(self, serializer):
+        org = self.get_organization()
+        reading = serializer.save(organization=org, recorded_by=self.request.user)
+        record_audit_event(
+            organization=org,
+            actor_user=self.request.user,
+            action="METER_READING_RECORDED",
+            entity_type="UtilityMeterReading",
+            entity_id=reading.id,
+            metadata={
+                "unit_code": reading.unit.unit_code,
+                "charge_type": reading.charge_type,
+                "billing_period": reading.billing_period,
+                "total_amount": str(reading.total_amount),
+            },
+        )

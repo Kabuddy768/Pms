@@ -27,6 +27,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "timezone",
             "plan_tier",
             "unit_limit",
+            "kra_pin",
             "created_at",
             "role",
         ]

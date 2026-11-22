@@ -34,6 +34,11 @@ class Property(TenantScopedModel):
         choices=PropertyStatus.choices,
         default=PropertyStatus.ACTIVE,
     )
+    management_fee_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("10.00"),
+    )
 
     class Meta:
         ordering = ["name"]
@@ -150,6 +155,7 @@ class Owner(TenantScopedModel):
     full_name = models.CharField(max_length=255)
     phone = models.CharField(max_length=32, blank=True)
     email = models.EmailField(blank=True)
+    kra_pin = models.CharField(max_length=20, blank=True, default="")
 
     class Meta:
         ordering = ["full_name"]

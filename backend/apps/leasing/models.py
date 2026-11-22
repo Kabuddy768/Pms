@@ -21,6 +21,7 @@ class Tenant(TenantScopedModel):
     phone = models.CharField(max_length=32)
     email = models.EmailField(blank=True)
     national_id = models.CharField(max_length=32, blank=True)
+    kra_pin = models.CharField(max_length=20, blank=True, default="")
     sms_opt_in = models.BooleanField(default=True)
     email_opt_in = models.BooleanField(default=True)
     status = models.CharField(

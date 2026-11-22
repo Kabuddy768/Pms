@@ -7,6 +7,7 @@ from django.db.models import Q
 
 from apps.core.models import TenantScopedModel
 from apps.leasing.models import Lease
+from apps.properties.models import Unit
 
 
 class SequenceType(models.TextChoices):
@@ -193,3 +194,73 @@ class InvoiceAdjustment(TenantScopedModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class UtilityChargeType(models.TextChoices):
+    WATER = "WATER", "Water"
+    GARBAGE = "GARBAGE", "Garbage"
+    SERVICE_CHARGE = "SERVICE_CHARGE", "Service Charge"
+
+
+class UtilityMeterReading(TenantScopedModel):
+    """Per-unit metered utility reading billed automatically into monthly rent invoices."""
+
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        related_name="meter_readings",
+    )
+    charge_type = models.CharField(
+        max_length=20,
+        choices=UtilityChargeType.choices,
+        default=UtilityChargeType.WATER,
+    )
+    billing_period = models.CharField(max_length=7)
+    previous_reading = models.DecimalField(max_digits=12, decimal_places=2)
+    current_reading = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_rate = models.DecimalField(max_digits=14, decimal_places=2)
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2)
+    billed_invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="utility_readings",
+    )
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recorded_meter_readings",
+    )
+
+    class Meta:
+        ordering = ["-billing_period", "unit__unit_code"]
+        indexes = [
+            models.Index(
+                fields=["organization", "billing_period"],
+                name="idx_meter_org_period",
+            )
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "unit", "charge_type", "billing_period"],
+                name="uniq_meter_reading_per_unit_type_period",
+            )
+        ]
+
+    def clean(self):
+        if self.unit_id and self.organization_id:
+            if self.unit.organization_id != self.organization_id:
+                raise ValidationError("Unit must belong to the same organization.")
+        if self.current_reading is not None and self.previous_reading is not None:
+            if self.current_reading < self.previous_reading:
+                raise ValidationError("Current reading cannot be less than previous reading.")
+        if self.unit_rate is not None and self.unit_rate < Decimal("0.00"):
+            raise ValidationError("Unit rate cannot be negative.")
+
+    def save(self, *args, **kwargs):
+        units_consumed = self.current_reading - self.previous_reading
+        self.total_amount = (units_consumed * self.unit_rate).quantize(Decimal("0.01"))
+        super().save(*args, **kwargs)
