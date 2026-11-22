@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { AttachmentList } from "@/components/AttachmentList";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SlideOver } from "@/components/SlideOver";
 import {
@@ -587,6 +588,21 @@ function LeasesContent({
                 ))}
               </div>
             </div>
+
+            <AttachmentList
+              entityType="LEASE"
+              entityId={selectedLease.id}
+              canWrite={canWrite}
+              canDelete={canWrite}
+              heading="Signed Lease Documents (URL-Only)"
+            />
+            <AttachmentList
+              entityType="INSPECTION"
+              entityId={selectedLease.id}
+              canWrite={true}
+              canDelete={canWrite}
+              heading="Move-In / Move-Out Inspection Photos (URL-Only)"
+            />
           </div>
         )}
       </SlideOver>

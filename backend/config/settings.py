@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.payments",
     "apps.expenses",
     "apps.maintenance",
+    "apps.documents",
     "apps.reporting",
 ]
 
@@ -114,6 +115,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 _DEFAULT_CORS_ORIGINS = (
     "https://pms-six-theta.vercel.app",
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://localhost:8081",
 )
 CORS_ALLOWED_ORIGINS = list(

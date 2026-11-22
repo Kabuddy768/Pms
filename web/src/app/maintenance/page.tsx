@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { AttachmentList } from "@/components/AttachmentList";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SlideOver } from "@/components/SlideOver";
 import {
@@ -12,7 +13,15 @@ import {
   type UnitItem,
 } from "@/lib/api";
 
-function MaintenanceContent({ orgId }: { orgId: string | null }) {
+function MaintenanceContent({
+  orgId,
+  role,
+}: {
+  orgId: string | null;
+  role: string | null;
+}) {
+  const canDeleteAttach =
+    role === "OWNER" || role === "MANAGER" || role === "ACCOUNTANT";
   const [requests, setRequests] = useState<MaintenanceRequestItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -428,6 +437,14 @@ function MaintenanceContent({ orgId }: { orgId: string | null }) {
                 </select>
               </div>
             </div>
+
+            <AttachmentList
+              entityType="MAINTENANCE"
+              entityId={selected.id}
+              canWrite={true}
+              canDelete={canDeleteAttach}
+              heading="Maintenance Photos & Quotes (URL-Only)"
+            />
           </div>
         )}
       </SlideOver>
@@ -439,7 +456,10 @@ export default function MaintenancePage() {
   return (
     <AppShell>
       {({ activeMembership }) => (
-        <MaintenanceContent orgId={activeMembership?.organization_id || null} />
+        <MaintenanceContent
+          orgId={activeMembership?.organization_id || null}
+          role={activeMembership?.role || null}
+        />
       )}
     </AppShell>
   );

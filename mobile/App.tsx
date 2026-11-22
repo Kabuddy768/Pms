@@ -63,6 +63,7 @@ export default function App() {
   // Maintenance form
   const [maintPropId, setMaintPropId] = useState("");
   const [maintTitle, setMaintTitle] = useState("");
+  const [maintPhotoUrl, setMaintPhotoUrl] = useState("");
 
   // Utility meter readings state
   const [units, setUnits] = useState<UnitSummary[]>([]);
@@ -202,13 +203,27 @@ export default function App() {
     if (!token || !orgId || !maintPropId || !maintTitle.trim()) return;
     setError("");
     try {
-      await mobileFetch("/maintenance-requests/", {
+      const created = await mobileFetch<MaintenanceSummary>("/maintenance-requests/", {
         method: "POST",
         token,
         orgId,
         body: { property: maintPropId, title: maintTitle.trim(), priority: "MEDIUM" },
       });
+      if (maintPhotoUrl.trim()) {
+        await mobileFetch("/attachments/", {
+          method: "POST",
+          token,
+          orgId,
+          body: {
+            entity_type: "MAINTENANCE",
+            entity_id: created.id,
+            title: `${created.title} photo`,
+            file_url: maintPhotoUrl.trim(),
+          },
+        });
+      }
       setMaintTitle("");
+      setMaintPhotoUrl("");
       await loadWorkspace(token, orgId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not log request");
@@ -561,6 +576,13 @@ export default function App() {
                 placeholder="Issue title (e.g. Gate lock broken)"
                 value={maintTitle}
                 onChangeText={setMaintTitle}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Optional photo URL (https://...)"
+                autoCapitalize="none"
+                value={maintPhotoUrl}
+                onChangeText={setMaintPhotoUrl}
               />
               <Pressable style={styles.primaryBtn} onPress={handleCreateMaintenance}>
                 <Text style={styles.primaryBtnText}>Create Ticket</Text>

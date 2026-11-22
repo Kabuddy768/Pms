@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { AttachmentList } from "@/components/AttachmentList";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SlideOver } from "@/components/SlideOver";
 import {
@@ -466,6 +467,14 @@ function ExpensesContent({
                 </button>
               </div>
             )}
+
+            <AttachmentList
+              entityType="EXPENSE"
+              entityId={selected.id}
+              canWrite={canWrite}
+              canDelete={canWrite}
+              heading="Vendor Invoices & Receipts (URL-Only)"
+            />
           </div>
         )}
       </SlideOver>

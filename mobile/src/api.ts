@@ -93,6 +93,14 @@ export interface MeterReadingSummary {
   billed_invoice_number: string | null;
 }
 
+export interface AttachmentSummary {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  title: string;
+  file_url: string;
+}
+
 const DEFAULT_BASE =
   Platform.OS === "android"
     ? "http://10.0.2.2:8000/api/v1"

@@ -450,6 +450,17 @@ export interface KraMriSummaryResponse {
   }>;
 }
 
+export interface AttachmentItem {
+  id: string;
+  entity_type: "MAINTENANCE" | "LEASE" | "EXPENSE" | "INSPECTION";
+  entity_id: string;
+  title: string;
+  file_url: string;
+  content_type: string;
+  uploaded_by_email: string | null;
+  created_at: string;
+}
+
 export function buildWhatsAppUrl(
   phone: string | null | undefined,
   message: string

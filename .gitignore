@@ -34,3 +34,7 @@ Thumbs.db
 # Database Backups
 infra/backups/
 *.dump
+
+# Playwright
+playwright-report/
+test-results/
