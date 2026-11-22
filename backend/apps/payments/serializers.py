@@ -46,6 +46,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         source="lease.unit.property.name", read_only=True, default=None
     )
     tenant_name = serializers.CharField(source="tenant.full_name", read_only=True, default=None)
+    tenant_phone = serializers.CharField(source="tenant.phone", read_only=True, default=None)
     allocated_amount = serializers.SerializerMethodField()
     unallocated_amount = serializers.SerializerMethodField()
     is_matched = serializers.SerializerMethodField()
@@ -61,6 +62,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "property_name",
             "tenant",
             "tenant_name",
+            "tenant_phone",
             "payment_reference",
             "receipt_number",
             "method",
@@ -207,3 +209,42 @@ class AllocatePaymentSerializer(serializers.Serializer):
 
 class ReversePaymentSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=255)
+
+
+class PaymentCsvRowSerializer(serializers.Serializer):
+    """Single parsed row from a Paybill or Bank CSV statement."""
+
+    reference = serializers.CharField(max_length=100)
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    account_ref = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, default=""
+    )
+    phone = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    payer_name = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    method = serializers.ChoiceField(
+        choices=PaymentMethod.choices,
+        default=PaymentMethod.MPESA_PAYBILL,
+    )
+    received_at = serializers.DateTimeField(required=False, allow_null=True, default=None)
+
+    def validate_reference(self, value: str) -> str:
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise serializers.ValidationError("Reference is required.")
+        return cleaned
+
+    def validate_amount(self, value: Decimal) -> Decimal:
+        if value <= Decimal("0.00"):
+            raise serializers.ValidationError("Amount must be greater than zero.")
+        return value
+
+
+class PaymentCsvImportSerializer(serializers.Serializer):
+    dry_run = serializers.BooleanField(default=True)
+    rows = serializers.ListField(
+        child=PaymentCsvRowSerializer(),
+        allow_empty=False,
+        max_length=500,
+    )

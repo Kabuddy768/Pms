@@ -1,16 +1,92 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SlideOver } from "@/components/SlideOver";
 import {
   apiFetch,
+  buildWhatsAppUrl,
   formatKES,
+  type CsvImportResponse,
+  type CsvImportRowInput,
   type LeaseItem,
   type PaginatedResponse,
   type PaymentItem,
 } from "@/lib/api";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      out.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current.trim());
+  return out;
+}
+
+function parseStatementCsv(
+  rawCsv: string,
+  defaultMethod: PaymentItem["method"]
+): CsvImportRowInput[] {
+  const lines = rawCsv
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const headers = splitCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/\s+/g, "_"));
+  const colIndex = (candidates: string[]) =>
+    headers.findIndex((h) => candidates.includes(h));
+
+  const refIdx = colIndex(["reference", "trans_id", "receipt_no", "receipt", "ref"]);
+  const amtIdx = colIndex(["amount", "paid_in", "credit", "trans_amount"]);
+  const acctIdx = colIndex(["account_ref", "bill_ref", "bill_ref_number", "account", "unit"]);
+  const phoneIdx = colIndex(["phone", "msisdn", "mobile"]);
+  const nameIdx = colIndex(["payer_name", "name", "details", "first_name"]);
+  const methodIdx = colIndex(["method", "channel"]);
+
+  if (refIdx === -1 || amtIdx === -1) return [];
+
+  const parsed: CsvImportRowInput[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cells = splitCsvLine(lines[i]);
+    const refVal = (cells[refIdx] || "").trim();
+    const rawAmt = (cells[amtIdx] || "").replace(/,/g, "").trim();
+    if (!refVal || !rawAmt || Number.isNaN(Number(rawAmt)) || Number(rawAmt) <= 0) {
+      continue;
+    }
+    const rawMethod = methodIdx >= 0 ? (cells[methodIdx] || "").toUpperCase() : "";
+    const methodVal: PaymentItem["method"] =
+      rawMethod === "BANK_TRANSFER" || rawMethod === "CASH" || rawMethod === "CHEQUE"
+        ? rawMethod
+        : defaultMethod;
+    parsed.push({
+      reference: refVal,
+      amount: Number(rawAmt).toFixed(2),
+      account_ref: acctIdx >= 0 ? cells[acctIdx] || "" : "",
+      phone: phoneIdx >= 0 ? cells[phoneIdx] || "" : "",
+      payer_name: nameIdx >= 0 ? cells[nameIdx] || "" : "",
+      method: methodVal,
+    });
+  }
+  return parsed;
+}
 
 function PaymentsContent({
   orgId,
@@ -31,8 +107,15 @@ function PaymentsContent({
   const [leases, setLeases] = useState<LeaseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState<"none" | "manual" | "mpesa">("none");
+  const [mode, setMode] = useState<"none" | "manual" | "mpesa" | "csv">("none");
   const [selectedPayment, setSelectedPayment] = useState<PaymentItem | null>(null);
+
+  // CSV Statement importer state
+  const [csvText, setCsvText] = useState("");
+  const [csvDefaultMethod, setCsvDefaultMethod] =
+    useState<PaymentItem["method"]>("MPESA_PAYBILL");
+  const [csvPreview, setCsvPreview] = useState<CsvImportResponse | null>(null);
+  const [csvBusy, setCsvBusy] = useState(false);
 
   // Manual payment form
   const [leaseId, setLeaseId] = useState("");
@@ -191,6 +274,40 @@ function PaymentsContent({
     }
   };
 
+  const handleCsvFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    setCsvText(text);
+    setCsvPreview(null);
+  };
+
+  const handleCsvRun = async (dryRun: boolean) => {
+    setError("");
+    const parsed = parseStatementCsv(csvText, csvDefaultMethod);
+    if (parsed.length === 0) {
+      setError(
+        "No valid rows found. Include header columns: reference,amount,account_ref,phone,payer_name"
+      );
+      return;
+    }
+    setCsvBusy(true);
+    try {
+      const res = await apiFetch<CsvImportResponse>("/payments/import-csv/", {
+        method: "POST",
+        body: JSON.stringify({ dry_run: dryRun, rows: parsed }),
+      });
+      setCsvPreview(res);
+      if (!dryRun) {
+        await reloadData();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "CSV reconciliation failed");
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
   if (!orgId) {
     return <div className="text-sm text-[#475569]">Select or create an organization.</div>;
   }
@@ -305,7 +422,14 @@ function PaymentsContent({
         </div>
 
         {canWrite && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setMode(mode === "csv" ? "none" : "csv")}
+              className="px-3 py-1.5 text-xs font-medium border border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] rounded"
+            >
+              Import Statement CSV
+            </button>
             <button
               type="button"
               onClick={() => setMode(mode === "mpesa" ? "none" : "mpesa")}
@@ -425,6 +549,139 @@ function PaymentsContent({
             Save &amp; Auto-Allocate
           </button>
         </form>
+      )}
+
+      {mode === "csv" && canWrite && (
+        <div className="bg-white border border-[#E2E8F0] rounded-md p-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-[#0F172A]">
+                Paybill / Bank Statement CSV Reconciliation
+              </div>
+              <div className="text-[11px] text-[#64748B] font-mono">
+                Expected CSV headers: reference,amount,account_ref,phone,payer_name
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={csvDefaultMethod}
+                onChange={(e) =>
+                  setCsvDefaultMethod(e.target.value as PaymentItem["method"])
+                }
+                className="border border-[#CBD5E1] rounded px-2.5 py-1 text-xs bg-white"
+              >
+                <option value="MPESA_PAYBILL">Default: M-Pesa Paybill</option>
+                <option value="BANK_TRANSFER">Default: Bank Transfer</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setCsvText(
+                    "reference,amount,account_ref,phone,payer_name\nMPESA-CSV-901,25000.00,A1,254712345678,Sample Tenant\nBANK-CSV-902,15000.00,TYPO-REF,254700000000,Unmatched Payer"
+                  );
+                  setCsvPreview(null);
+                }}
+                className="px-2.5 py-1 text-xs border border-[#CBD5E1] rounded bg-[#F8FAFC] hover:bg-[#F1F5F9]"
+              >
+                Load Sample CSV
+              </button>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvFile}
+                className="text-xs text-[#475569]"
+              />
+            </div>
+          </div>
+
+          <textarea
+            rows={4}
+            value={csvText}
+            onChange={(e) => {
+              setCsvText(e.target.value);
+              setCsvPreview(null);
+            }}
+            placeholder="reference,amount,account_ref,phone,payer_name"
+            className="w-full border border-[#CBD5E1] rounded p-2.5 text-xs font-mono bg-[#F8FAFC]"
+          />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={csvBusy || !csvText.trim()}
+              onClick={() => void handleCsvRun(true)}
+              className="px-3.5 py-1.5 text-xs font-medium border border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] rounded disabled:opacity-50"
+            >
+              {csvBusy ? "Analyzing..." : "1. Preview Matches (Dry Run)"}
+            </button>
+            {csvPreview && csvPreview.dry_run && (
+              <button
+                type="button"
+                disabled={csvBusy}
+                onClick={() => void handleCsvRun(false)}
+                className="px-3.5 py-1.5 text-xs font-medium bg-[#0F5338] hover:bg-[#0B3F2A] text-white rounded disabled:opacity-50"
+              >
+                2. Commit Reconciliation (
+                {csvPreview.matched_count + csvPreview.unmatched_suspense_count} new)
+              </button>
+            )}
+          </div>
+
+          {csvPreview && (
+            <div className="space-y-3 border-t border-[#E2E8F0] pt-3">
+              <div className="flex flex-wrap gap-3 text-xs font-mono tabular-nums">
+                <span className="px-2 py-1 rounded bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]">
+                  Matched: {csvPreview.matched_count}
+                </span>
+                <span className="px-2 py-1 rounded bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A]">
+                  Suspense: {csvPreview.unmatched_suspense_count}
+                </span>
+                <span className="px-2 py-1 rounded bg-[#F1F5F9] text-[#475569] border border-[#CBD5E1]">
+                  Duplicates Skipped: {csvPreview.duplicate_skipped_count}
+                </span>
+                {!csvPreview.dry_run && (
+                  <span className="px-2 py-1 rounded bg-[#ECFDF5] text-[#0F5338] border border-[#A7F3D0] font-semibold">
+                    COMMITTED
+                  </span>
+                )}
+              </div>
+
+              <div className="border border-[#E2E8F0] rounded overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#475569]">
+                      <th className="py-2 px-3">Ref</th>
+                      <th className="py-2 px-3">Account Ref</th>
+                      <th className="py-2 px-3 text-right">Amount</th>
+                      <th className="py-2 px-3">Outcome</th>
+                      <th className="py-2 px-3">Matched Unit / Receipt</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E2E8F0]">
+                    {csvPreview.rows.map((r, i) => (
+                      <tr key={`${r.reference}-${i}`}>
+                        <td className="py-1.5 px-3 font-mono">{r.reference}</td>
+                        <td className="py-1.5 px-3 font-mono text-[#475569]">
+                          {r.account_ref || "—"}
+                        </td>
+                        <td className="py-1.5 px-3 text-right font-mono tabular-nums">
+                          {formatKES(r.amount)}
+                        </td>
+                        <td className="py-1.5 px-3 font-mono">{r.outcome}</td>
+                        <td className="py-1.5 px-3 font-mono text-[#0F5338]">
+                          {r.matched_unit_code
+                            ? `${r.matched_unit_code} (${r.matched_tenant_name || ""})`
+                            : "—"}
+                          {r.receipt_number ? ` · ${r.receipt_number}` : ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {mode === "mpesa" && canWrite && (
@@ -556,6 +813,26 @@ function PaymentsContent({
       >
         {selectedPayment && (
           <div className="space-y-5 text-xs">
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href={`/payments/${selectedPayment.id}/receipt`}
+                className="px-3 py-1.5 bg-[#0F5338] hover:bg-[#0B3F2A] text-white font-medium rounded"
+              >
+                Print Receipt / PDF
+              </Link>
+              <a
+                href={buildWhatsAppUrl(
+                  selectedPayment.tenant_phone || selectedPayment.payer_phone,
+                  `Hello ${selectedPayment.tenant_name || selectedPayment.payer_name || "Tenant"}, we confirm receipt of ${formatKES(selectedPayment.amount)} (${selectedPayment.method}, Ref: ${selectedPayment.payment_reference}). Official Receipt: ${selectedPayment.receipt_number || selectedPayment.payment_reference}.`
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 border border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[#0F172A] font-medium rounded"
+              >
+                Share via WhatsApp
+              </a>
+            </div>
+
             <div className="grid grid-cols-3 gap-3">
               <div className="border border-[#E2E8F0] rounded p-3">
                 <div className="text-[#64748B]">Amount</div>

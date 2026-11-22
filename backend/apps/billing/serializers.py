@@ -45,6 +45,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     unit_code = serializers.CharField(source="lease.unit.unit_code", read_only=True)
     property_name = serializers.CharField(source="lease.unit.property.name", read_only=True)
     tenant_name = serializers.SerializerMethodField()
+    tenant_phone = serializers.SerializerMethodField()
     adjusted_total = serializers.SerializerMethodField()
     allocated_amount = serializers.SerializerMethodField()
     outstanding_balance = serializers.SerializerMethodField()
@@ -59,6 +60,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "unit_code",
             "property_name",
             "tenant_name",
+            "tenant_phone",
             "invoice_number",
             "billing_period",
             "issue_date",
@@ -77,6 +79,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
     def get_tenant_name(self, obj: Invoice) -> str:
         occ = obj.lease.occupants.first()
         return occ.tenant.full_name if occ else "—"
+
+    def get_tenant_phone(self, obj: Invoice) -> str:
+        occ = obj.lease.occupants.first()
+        return occ.tenant.phone if occ else ""
 
     def get_adjusted_total(self, obj: Invoice) -> str:
         return f"{obj.adjusted_total():.2f}"

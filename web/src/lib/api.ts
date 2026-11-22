@@ -224,6 +224,7 @@ export interface InvoiceItem {
   unit_code: string;
   property_name: string;
   tenant_name: string;
+  tenant_phone?: string;
   invoice_number: string;
   billing_period: string;
   issue_date: string;
@@ -262,6 +263,7 @@ export interface PaymentItem {
   property_name: string | null;
   tenant: string | null;
   tenant_name: string | null;
+  tenant_phone?: string | null;
   payment_reference: string;
   receipt_number: string;
   method: "MPESA_PAYBILL" | "MPESA_STK" | "BANK_TRANSFER" | "CASH" | "CHEQUE";
@@ -348,6 +350,54 @@ export interface DashboardSummary {
     end_date: string;
     rent_amount: string;
   }>;
+}
+
+export interface CsvImportRowInput {
+  reference: string;
+  amount: string;
+  account_ref?: string;
+  phone?: string;
+  payer_name?: string;
+  method?: PaymentItem["method"];
+}
+
+export interface CsvImportPreviewRow {
+  reference: string;
+  amount: string;
+  method: string;
+  account_ref: string;
+  outcome: "MATCHED" | "UNMATCHED_SUSPENSE" | "DUPLICATE_SKIPPED";
+  matched_unit_code: string | null;
+  matched_tenant_name: string | null;
+  receipt_number: string | null;
+}
+
+export interface CsvImportResponse {
+  dry_run: boolean;
+  total_rows: number;
+  matched_count: number;
+  unmatched_suspense_count: number;
+  duplicate_skipped_count: number;
+  rows: CsvImportPreviewRow[];
+}
+
+export function buildWhatsAppUrl(
+  phone: string | null | undefined,
+  message: string
+): string {
+  const digits = (phone || "").replace(/\D/g, "");
+  let target = "";
+  if (digits.startsWith("254") && digits.length >= 12) {
+    target = digits;
+  } else if (digits.startsWith("0") && digits.length === 10) {
+    target = `254${digits.slice(1)}`;
+  } else if (digits.length === 9 && (digits.startsWith("7") || digits.startsWith("1"))) {
+    target = `254${digits}`;
+  }
+  const encoded = encodeURIComponent(message);
+  return target
+    ? `https://wa.me/${target}?text=${encoded}`
+    : `https://wa.me/?text=${encoded}`;
 }
 
 export function formatKES(amount: string | number): string {

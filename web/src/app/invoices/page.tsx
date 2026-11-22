@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DataTable, type DataTableColumn } from "@/components/DataTable";
 import { SlideOver } from "@/components/SlideOver";
 import {
   apiFetch,
+  buildWhatsAppUrl,
   formatKES,
   type InvoiceItem,
   type PaginatedResponse,
@@ -340,6 +342,26 @@ function InvoicesContent({
       >
         {selected && (
           <div className="space-y-5 text-xs">
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href={`/invoices/${selected.id}/print`}
+                className="px-3 py-1.5 bg-[#0F5338] hover:bg-[#0B3F2A] text-white font-medium rounded"
+              >
+                Print / Save PDF
+              </Link>
+              <a
+                href={buildWhatsAppUrl(
+                  selected.tenant_phone,
+                  `Hello ${selected.tenant_name}, rent invoice ${selected.invoice_number} for Unit ${selected.unit_code} (${selected.property_name}): Balance due ${formatKES(selected.outstanding_balance)} by ${selected.due_date}.`
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 border border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[#0F172A] font-medium rounded"
+              >
+                Share via WhatsApp
+              </a>
+            </div>
+
             <div className="grid grid-cols-3 gap-3">
               <div className="border border-[#E2E8F0] rounded p-3">
                 <div className="text-[#64748B]">Adjusted Total</div>

@@ -25,6 +25,7 @@ from .serializers import (
     AssignPaymentSerializer,
     MpesaCallbackSerializer,
     PaymentCreateSerializer,
+    PaymentCsvImportSerializer,
     PaymentSerializer,
     ReversePaymentSerializer,
 )
@@ -259,3 +260,121 @@ class PaymentViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         )
         payment.refresh_from_db()
         return Response(PaymentSerializer(payment).data)
+
+    @action(detail=False, methods=["post"], url_path="import-csv")
+    @transaction.atomic
+    def import_csv(self, request):
+        """Dry-run preview or commit of parsed Paybill / Bank CSV statement rows."""
+        org = Organization.objects.select_for_update().get(id=self.get_organization().id)
+        serializer = PaymentCsvImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        dry_run = serializer.validated_data["dry_run"]
+        rows = serializer.validated_data["rows"]
+        refs = [row["reference"] for row in rows]
+        existing_refs = set(
+            Payment.objects.filter(
+                organization=org,
+                payment_reference__in=refs,
+            ).values_list("payment_reference", flat=True)
+        )
+
+        seen_refs: set[str] = set()
+        matched_count = 0
+        unmatched_count = 0
+        duplicate_count = 0
+        preview_rows = []
+
+        for row in rows:
+            ref = row["reference"]
+            if ref in existing_refs or ref in seen_refs:
+                duplicate_count += 1
+                preview_rows.append(
+                    {
+                        "reference": ref,
+                        "amount": f"{row['amount']:.2f}",
+                        "method": row["method"],
+                        "account_ref": row["account_ref"],
+                        "outcome": "DUPLICATE_SKIPPED",
+                        "matched_unit_code": None,
+                        "matched_tenant_name": None,
+                        "receipt_number": None,
+                    }
+                )
+                continue
+
+            seen_refs.add(ref)
+            matched_lease = match_lease_for_callback(
+                organization=org,
+                raw_account_ref=row["account_ref"],
+                payer_phone=row["phone"],
+            )
+            occ = matched_lease.occupants.first() if matched_lease else None
+            tenant = occ.tenant if occ else None
+
+            if matched_lease:
+                matched_count += 1
+                outcome = "MATCHED"
+            else:
+                unmatched_count += 1
+                outcome = "UNMATCHED_SUSPENSE"
+
+            receipt_number = None
+            if not dry_run:
+                payment = Payment.objects.create(
+                    organization=org,
+                    lease=matched_lease,
+                    tenant=tenant,
+                    payment_reference=ref,
+                    method=row["method"],
+                    currency=org.default_currency,
+                    amount=row["amount"],
+                    received_at=row["received_at"] or timezone.now(),
+                    status=PaymentStatus.CONFIRMED,
+                    payer_name=row["payer_name"],
+                    payer_phone=row["phone"],
+                    raw_account_ref=row["account_ref"],
+                )
+                receipt_number = ensure_receipt_number(payment)
+                if matched_lease:
+                    allocate_payment_fifo(payment=payment)
+
+            preview_rows.append(
+                {
+                    "reference": ref,
+                    "amount": f"{row['amount']:.2f}",
+                    "method": row["method"],
+                    "account_ref": row["account_ref"],
+                    "outcome": outcome,
+                    "matched_unit_code": matched_lease.unit.unit_code if matched_lease else None,
+                    "matched_tenant_name": tenant.full_name if tenant else None,
+                    "receipt_number": receipt_number,
+                }
+            )
+
+        if not dry_run:
+            record_audit_event(
+                organization=org,
+                actor_user=request.user,
+                action="PAYMENTS_CSV_IMPORTED",
+                entity_type="Organization",
+                entity_id=org.id,
+                metadata={
+                    "total_rows": len(rows),
+                    "matched_count": matched_count,
+                    "unmatched_suspense_count": unmatched_count,
+                    "duplicate_skipped_count": duplicate_count,
+                },
+            )
+
+        return Response(
+            {
+                "dry_run": dry_run,
+                "total_rows": len(rows),
+                "matched_count": matched_count,
+                "unmatched_suspense_count": unmatched_count,
+                "duplicate_skipped_count": duplicate_count,
+                "rows": preview_rows,
+            },
+            status=status.HTTP_200_OK if dry_run else status.HTTP_201_CREATED,
+        )
